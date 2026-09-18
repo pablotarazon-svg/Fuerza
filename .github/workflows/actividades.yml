@@ -20,64 +20,17 @@ jobs:
           ICU_KEY: ${{ secrets.INTERVALS_API_KEY }}
         run: |
           python3 - <<'PY'
-          import base64, datetime, json, os, urllib.request
+          import base64, datetime, json, os, sys, urllib.error, urllib.request
 
-          aid = os.environ["ICU_ID"].strip()
-          key = os.environ["ICU_KEY"].strip()
-          if not aid.startswith("i") and aid.isdigit():
+          aid = (os.environ.get("ICU_ID") or "").strip()
+          key = (os.environ.get("ICU_KEY") or "").strip()
+
+          if not aid or not key:
+              sys.exit("ERROR: faltan los secretos INTERVALS_ATHLETE_ID o INTERVALS_API_KEY")
+          if aid.isdigit():
               aid = "i" + aid
+          print("Atleta:", aid, "| clave de", len(key), "caracteres")
 
           hoy = datetime.date.today()
           desde = hoy - datetime.timedelta(days=200)
-          url = ("https://intervals.icu/api/v1/athlete/%s/activities?oldest=%s&newest=%s"
-                 % (aid, desde.isoformat(), hoy.isoformat()))
-
-          auth = base64.b64encode(("API_KEY:" + key).encode()).decode()
-          req = urllib.request.Request(url, headers={"Authorization": "Basic " + auth})
-          with urllib.request.urlopen(req, timeout=60) as r:
-              acts = json.load(r)
-
-          def n(v):
-              try:
-                  f = float(v)
-                  return round(f, 2)
-              except (TypeError, ValueError):
-                  return None
-
-          out = []
-          for a in acts:
-              fecha = (a.get("start_date_local") or "")[:10]
-              if not fecha:
-                  continue
-              dist = n(a.get("distance"))
-              out.append({
-                  "id": a.get("id"),
-                  "d": fecha,
-                  "t": a.get("type") or "Other",
-                  "n": a.get("name") or "",
-                  "km": round(dist / 1000.0, 2) if dist else None,
-                  "s": a.get("moving_time") or a.get("elapsed_time"),
-                  "up": n(a.get("total_elevation_gain")),
-                  "hr": n(a.get("average_heartrate")),
-                  "l": n(a.get("icu_training_load")),
-              })
-
-          out.sort(key=lambda x: x["d"], reverse=True)
-          out = out[:300]
-
-          datos = {
-              "updated": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0, tzinfo=None).isoformat() + "Z",
-              "activities": out,
-          }
-          with open("runs.json", "w", encoding="utf-8") as f:
-              json.dump(datos, f, ensure_ascii=False, separators=(",", ":"))
-          print("Actividades guardadas:", len(out))
-          PY
-
-      - name: Guardar en el repositorio
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add runs.json
-          git diff --staged --quiet || git commit -m "Actualizar actividades"
-          git push
+          url = ("https://intervals.icu/
