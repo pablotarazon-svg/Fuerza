@@ -82,7 +82,28 @@
   .stat .v{font-family:var(--mono); font-size:14.5px; color:var(--chalk); margin-top:2px; white-space:nowrap;
     overflow:hidden; text-overflow:ellipsis}
   .stat.dest .v{color:var(--fig-load)}
-  .amap{margin-top:10px; background:var(--surface2); border-radius:11px; padding:6px}
+  .amap{margin-top:10px; background:var(--surface2); border-radius:11px; padding:6px; cursor:pointer; position:relative}
+  .amap .lupa{position:absolute; right:9px; bottom:7px; font-size:11px; color:var(--faint);
+    font-family:var(--mono); background:rgba(21,23,26,.75); border-radius:7px; padding:2px 7px}
+  .amap:active{opacity:.75}
+  .ovl{position:fixed; inset:0; z-index:100; background:var(--bg); display:none; flex-direction:column}
+  .ovl.on{display:flex}
+  .ovlbar{display:flex; align-items:center; gap:10px; padding:calc(9px + env(safe-area-inset-top)) 13px 9px;
+    border-bottom:1px solid var(--line)}
+  .ovlbar .t{flex:1; min-width:0}
+  .ovlbar .n{font-family:var(--disp); font-size:16px; font-weight:600; letter-spacing:.03em;
+    text-transform:uppercase; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:block}
+  .ovlbar .s{font-family:var(--mono); font-size:11.5px; color:var(--faint); display:block; margin-top:2px}
+  .ovlbar button, .ovlbar a{border:1px solid var(--line); background:var(--surface); color:var(--muted);
+    border-radius:9px; padding:8px 11px; font-size:13px; cursor:pointer; flex:none; text-decoration:none}
+  #mapBox{flex:1; min-height:200px; background:var(--surface2)}
+  #mapBox .leaflet-container{width:100%; height:100%; background:var(--surface2)}
+  .ovlsvg{padding:14px}
+  .ovlsvg svg{width:100%; height:auto}
+  .ovlsvg .ruta{fill:none; stroke:var(--fig-load); stroke-width:2.6; stroke-linecap:round; stroke-linejoin:round}
+  .ovlsvg .ini{fill:#5FBF7A}
+  .ovlsvg .fin{fill:#E2452E}
+  .ovlnota{color:var(--faint); font-size:12.5px; text-align:center; padding:0 20px 14px; line-height:1.5}
   .amap svg{display:block; width:100%; height:auto}
   .amap .ruta{fill:none; stroke:var(--fig-load); stroke-width:2.6; stroke-linecap:round; stroke-linejoin:round}
   .amap .ini{fill:#5FBF7A}
@@ -236,6 +257,15 @@
   <div id="content"></div>
   <footer id="foot">los datos se guardan automáticamente en este móvil</footer>
 </main>
+
+<div class="ovl" id="mapOv">
+  <div class="ovlbar">
+    <span class="t"><span class="n" id="ovlName"></span><span class="s" id="ovlSub"></span></span>
+    <a id="ovlLink" target="_blank" rel="noopener">Intervals</a>
+    <button id="ovlClose">✕</button>
+  </div>
+  <div id="mapBox"></div>
+</div>
 
 <script>
 "use strict";
@@ -510,7 +540,7 @@ function nomDia(iso){
   const dias = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
   return dias[d.getDay()];
 }
-function mapaSVG(g){
+function mapaSVG(g, grande){
   if (!g || g.length < 5) return "";
   const latM = g.reduce((a,p) => a + p[0], 0) / g.length;
   const k = Math.cos(latM * Math.PI / 180);
@@ -518,16 +548,81 @@ function mapaSVG(g){
   const x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs);
   const y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
   const w = Math.max(x1-x0, 1e-6), hh = Math.max(y1-y0, 1e-6);
-  const W = 300, H = 120, pad = 10;
+  const W = 300, H = grande ? 260 : 120, pad = 10;
   const esc2 = Math.min((W-2*pad)/w, (H-2*pad)/hh);
   const dx = (W - w*esc2)/2 - x0*esc2, dy = (H - hh*esc2)/2 - y0*esc2;
   const pts = g.map(p => [((p[1]*k)*esc2+dx).toFixed(1), ((-p[0])*esc2+dy).toFixed(1)]);
   const d = "M" + pts.map(p => p[0] + " " + p[1]).join(" L");
   const a = pts[0], b = pts[pts.length-1];
-  return '<div class="amap"><svg viewBox="0 0 ' + W + ' ' + H + '" aria-hidden="true">' +
+  const svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" aria-hidden="true">' +
     '<path class="ruta" d="' + d + '"/>' +
     '<circle class="ini" cx="' + a[0] + '" cy="' + a[1] + '" r="4"/>' +
-    '<circle class="fin" cx="' + b[0] + '" cy="' + b[1] + '" r="4"/></svg></div>';
+    '<circle class="fin" cx="' + b[0] + '" cy="' + b[1] + '" r="4"/></svg>';
+  if (grande) return svg;
+  return '<div class="amap">' + svg + '<span class="lupa">toca para ampliar</span></div>';
+}
+
+/* ---- mapa a pantalla completa ---- */
+let leafletCargando = null, mapa = null;
+function cargarLeaflet(){
+  if (window.L) return Promise.resolve(true);
+  if (leafletCargando) return leafletCargando;
+  leafletCargando = new Promise(resolve => {
+    const css = document.createElement("link");
+    css.rel = "stylesheet";
+    css.href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
+    document.head.appendChild(css);
+    const js = document.createElement("script");
+    js.src = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
+    js.onload = () => resolve(true);
+    js.onerror = () => resolve(false);
+    document.head.appendChild(js);
+    setTimeout(() => resolve(!!window.L), 6000);
+  });
+  return leafletCargando;
+}
+
+function cerrarMapa(){
+  document.getElementById("mapOv").classList.remove("on");
+  if (mapa){ try{ mapa.remove(); }catch(e){} mapa = null; }
+  document.getElementById("mapBox").innerHTML = "";
+}
+
+async function abrirMapa(a){
+  if (!a.g || a.g.length < 5) return;
+  const ov = document.getElementById("mapOv");
+  document.getElementById("ovlName").textContent = a.n || tipoEs(a.t) || "Actividad";
+  const det = [fmtDate(a.d), fmtHora(a.dt), fmtKm(a.km), fmtDur(a.s), fmtRitmo(a.t, a.km, a.s)]
+    .filter(Boolean).join(" · ");
+  document.getElementById("ovlSub").textContent = det;
+  const link = document.getElementById("ovlLink");
+  if (a.id){ link.href = "https://intervals.icu/activities/" + a.id; link.style.display = ""; }
+  else link.style.display = "none";
+  const box = document.getElementById("mapBox");
+  box.innerHTML = '<div class="ovlnota" style="padding-top:22px">cargando mapa…</div>';
+  ov.classList.add("on");
+
+  const ok = await cargarLeaflet();
+  if (!ov.classList.contains("on")) return;
+  if (!ok || !window.L){
+    box.innerHTML = '<div class="ovlsvg">' + mapaSVG(a.g, true) + '</div>' +
+      '<div class="ovlnota">Sin conexión para el mapa de calles.<br>Este es el trazado de tu recorrido.</div>';
+    return;
+  }
+  box.innerHTML = "";
+  try{
+    mapa = L.map(box, { zoomControl:true, attributionControl:true });
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      { maxZoom:18, attribution:"© OpenStreetMap" }).addTo(mapa);
+    const linea = L.polyline(a.g, { color:"#FFA84D", weight:4, opacity:.95 }).addTo(mapa);
+    L.circleMarker(a.g[0], { radius:6, color:"#5FBF7A", fillColor:"#5FBF7A", fillOpacity:1, weight:2 }).addTo(mapa);
+    L.circleMarker(a.g[a.g.length-1], { radius:6, color:"#E2452E", fillColor:"#E2452E", fillOpacity:1, weight:2 }).addTo(mapa);
+    mapa.fitBounds(linea.getBounds(), { padding:[24,24] });
+    setTimeout(() => { if (mapa) mapa.invalidateSize(); }, 200);
+  }catch(e){
+    box.innerHTML = '<div class="ovlsvg">' + mapaSVG(a.g, true) + '</div>' +
+      '<div class="ovlnota">No se pudo cargar el mapa.<br>Este es el trazado de tu recorrido.</div>';
+  }
 }
 
 async function loadRuns(){
@@ -612,6 +707,8 @@ function renderActividades(){
     }
     x += mapaSVG(a.g);
     c.innerHTML = x;
+    const m = c.querySelector(".amap");
+    if (m) m.onclick = () => abrirMapa(a);
     cont.appendChild(c);
   });
 }
@@ -926,6 +1023,9 @@ function render(){
   else if (currentView === "tabla") renderTabla();
   else renderDay();
 }
+
+document.getElementById("ovlClose").onclick = cerrarMapa;
+document.addEventListener("keydown", e => { if (e.key === "Escape") cerrarMapa(); });
 
 /* ================= init ================= */
 (async function(){
