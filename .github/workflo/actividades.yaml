@@ -1,0 +1,43 @@
+name: Actividades
+
+on:
+  schedule:
+    - cron: "0 5,11,17 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descargar actividades de Intervals.icu
+        env:
+          ICU_ID: ${{ secrets.INTERVALS_ATHLETE_ID }}
+          ICU_KEY: ${{ secrets.INTERVALS_API_KEY }}
+        run: |
+          ID=$(printf '%s' "$ICU_ID" | tr -d '[:space:]')
+          KEY=$(printf '%s' "$ICU_KEY" | tr -d '[:space:]')
+          case "$ID" in ''|i*) : ;; *) ID="i$ID" ;; esac
+          echo "ID del atleta: [$ID] · clave de ${#KEY} caracteres"
+          if [ -z "$ID" ] || [ -z "$KEY" ]; then echo "Falta algun secreto"; exit 1; fi
+          DESDE=$(date -d '-200 days' +%F)
+          HOY=$(date +%F)
+          URL="https://intervals.icu/api/v1/athlete/$ID/activities?oldest=$DESDE&newest=$HOY"
+          CODE=$(curl -sS -u "API_KEY:$KEY" -A "fuerza-app/1.0" -H "Accept: application/json" -o raw.json -w '%{http_code}' "$URL")
+          echo "Respuesta HTTP $CODE"
+          if [ "$CODE" != "200" ]; then echo "--- respuesta ---"; head -c 300 raw.json; echo; exit 1; fi
+          jq -c '{updated: (now | todate), activities: [.[] | select(.start_date_local != null) | {id: .id, d: .start_date_local[0:10], t: .type, n: .name, km: (if .distance then ((.distance / 10 | round) / 100) else null end), s: (.moving_time // .elapsed_time), up: .total_elevation_gain, hr: .average_heartrate, l: .icu_training_load}]}' raw.json > runs.json
+          rm -f raw.json
+          echo "Actividades: $(jq '.activities | length' runs.json)"
+
+      - name: Guardar en el repositorio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add runs.json
+          git diff --staged --quiet || git commit -m "Actualizar actividades"
+          git push
