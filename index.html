@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#15171A">
-<title>Fuerza · 3 días</title>
+<title>Entreno</title>
 <style>
   :root{
     --bg:#15171A; --surface:#1D2025; --surface2:#24282E; --line:#2E333A;
@@ -57,6 +57,36 @@
   .plate.aux{border-style:dashed}
   .plate.aux::after{display:none}
   .plate.aux .num{font-size:17px}
+
+  .tabs{display:flex; gap:6px; margin-top:11px; background:var(--surface2); border-radius:12px; padding:4px}
+  .tabs button{flex:1; border:none; background:transparent; color:var(--muted); border-radius:9px;
+    padding:9px 6px; cursor:pointer; font-family:var(--disp); font-weight:600; font-size:14px;
+    letter-spacing:.09em; text-transform:uppercase}
+  .tabs button.on{background:var(--chalk); color:#101214}
+
+  .diahead{display:flex; align-items:baseline; gap:9px; margin:16px 2px 9px}
+  .diahead:first-child{margin-top:4px}
+  .diahead .f{font-family:var(--disp); font-size:16px; font-weight:600; letter-spacing:.06em; text-transform:uppercase}
+  .diahead .tot{margin-left:auto; font-family:var(--mono); font-size:11.5px; color:var(--faint)}
+  .acard{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:12px; margin-bottom:10px}
+  .ahead{display:flex; align-items:center; gap:10px}
+  .aico{width:34px; height:34px; border-radius:50%; background:var(--surface2); flex:none;
+    display:flex; align-items:center; justify-content:center; font-size:17px}
+  .atit{flex:1; min-width:0}
+  .aname{display:block; font-family:var(--disp); font-size:16px; font-weight:600; letter-spacing:.03em;
+    text-transform:uppercase; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .ahora{display:block; font-family:var(--mono); font-size:11.5px; color:var(--faint); margin-top:2px}
+  .astats{display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin-top:10px}
+  .stat{background:var(--surface2); border-radius:9px; padding:6px 9px; min-width:0}
+  .stat .k{font-family:var(--mono); font-size:9.5px; color:var(--faint); letter-spacing:.08em; text-transform:uppercase}
+  .stat .v{font-family:var(--mono); font-size:14.5px; color:var(--chalk); margin-top:2px; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis}
+  .stat.dest .v{color:var(--fig-load)}
+  .amap{margin-top:10px; background:var(--surface2); border-radius:11px; padding:6px}
+  .amap svg{display:block; width:100%; height:auto}
+  .amap .ruta{fill:none; stroke:var(--fig-load); stroke-width:2.6; stroke-linecap:round; stroke-linejoin:round}
+  .amap .ini{fill:#5FBF7A}
+  .amap .fin{fill:#E2452E}
 
   main{padding:15px 13px 80px; max-width:600px; margin:0 auto}
 
@@ -155,6 +185,14 @@
   .sesion-row .n{color:var(--muted); min-width:0}
   .sesion-row .v{font-family:var(--mono); color:var(--chalk); white-space:nowrap}
 
+  .sync{display:flex; align-items:center; gap:8px; margin:0 2px 12px; font-family:var(--mono); font-size:11.5px; color:var(--faint)}
+  .sync button{border:1px solid var(--line); background:var(--surface); color:var(--muted);
+    border-radius:8px; padding:5px 9px; font-size:11.5px; cursor:pointer; font-family:var(--mono)}
+  .sesion.act{border-color:#2A3038}
+  .sesion-day.act{background:var(--surface2); color:var(--chalk); font-size:14px}
+  .actline{padding-top:2px; font-size:13.5px}
+  .actline .n{display:block; color:var(--chalk); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .actline .v{display:block; font-family:var(--mono); font-size:12.5px; color:var(--muted); margin-top:3px; line-height:1.5}
   .tbl{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:11px 12px; margin-bottom:11px}
   .tbl-h{display:flex; align-items:center; gap:8px; margin-bottom:6px}
   .tbl-dot{width:9px; height:9px; border-radius:50%; flex:none}
@@ -177,10 +215,11 @@
 
 <header>
   <div class="hrow">
-    <h1>Fuerza <span class="thin">· 3 días</span></h1>
+    <h1>Entreno <span class="thin">· diario</span></h1>
     <span id="saveState"></span>
   </div>
   <div id="todayLabel"></div>
+  <div class="tabs" id="tabs"></div>
   <div class="plates" id="plates"></div>
 </header>
 
@@ -341,9 +380,10 @@ const store = {
 };
 
 /* ================= estado ================= */
-let data = { hist:{}, cur:{}, custom:{} };
+let data = { hist:{}, cur:{}, custom:{}, runs:[], runsUp:null };
 let currentDay = "d1";
 let currentView = "day";
+let section = "act";
 const openHists = new Set();
 let finArmed = false, finTimer = null;
 
@@ -433,7 +473,162 @@ function bestSet(sets){
   return best;
 }
 
+/* ================= actividades (carreras) ================= */
+const ICONOS = { Run:"🏃", TrailRun:"🏃", Ride:"🚴", VirtualRide:"🚴", VirtualRun:"🏃",
+  Swim:"🏊", Hike:"🥾", Walk:"🚶", WeightTraining:"🏋️", Workout:"💪", Rowing:"🚣",
+  AlpineSki:"🎿", Yoga:"🧘", Elliptical:"🌀", Other:"•" };
+function icono(t){ return ICONOS[t] || "•"; }
+const TIPOS = { Run:"Carrera", TrailRun:"Trail", VirtualRun:"Cinta", Ride:"Bici", VirtualRide:"Rodillo",
+  Swim:"Natación", Hike:"Senderismo", Walk:"Caminata", WeightTraining:"Fuerza", Workout:"Entreno",
+  Rowing:"Remo", Yoga:"Yoga", Elliptical:"Elíptica", AlpineSki:"Esquí", Other:"Otro" };
+function tipoEs(t){ return TIPOS[t] || t || ""; }
+function fmtKm(km){ if (!km) return ""; return (Math.round(km*10)/10).toString().replace(".", ",") + " km"; }
+function fmtDur(s){
+  if (!s) return "";
+  const h = Math.floor(s/3600), m = Math.round((s%3600)/60);
+  return h ? (h + "h" + String(m).padStart(2,"0")) : (m + " min");
+}
+const A_PIE = { Run:1, TrailRun:1, VirtualRun:1, Hike:1, Walk:1 };
+function fmtRitmo(t, km, s){
+  if (!km || !s || km < 0.3) return "";
+  if (A_PIE[t]){
+    const p = (s/60) / km, mm = Math.floor(p), ss = Math.round((p-mm)*60);
+    return mm + ":" + String(ss).padStart(2,"0") + "/km";
+  }
+  if (t === "Swim") return Math.round((s/60)/(km*10)*100)/100 + " min/100m";
+  const v = km / (s/3600);
+  if (v < 1) return "";
+  return (Math.round(v*10)/10).toString().replace(".", ",") + " km/h";
+}
+function fmtHora(dt){
+  if (!dt || dt.length < 16) return "";
+  return dt.slice(11,16);
+}
+function nomDia(iso){
+  const p = iso.split("-");
+  const d = new Date(parseInt(p[0],10), parseInt(p[1],10)-1, parseInt(p[2],10));
+  const dias = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
+  return dias[d.getDay()];
+}
+function mapaSVG(g){
+  if (!g || g.length < 5) return "";
+  const latM = g.reduce((a,p) => a + p[0], 0) / g.length;
+  const k = Math.cos(latM * Math.PI / 180);
+  const xs = g.map(p => p[1] * k), ys = g.map(p => -p[0]);
+  const x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs);
+  const y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
+  const w = Math.max(x1-x0, 1e-6), hh = Math.max(y1-y0, 1e-6);
+  const W = 300, H = 120, pad = 10;
+  const esc2 = Math.min((W-2*pad)/w, (H-2*pad)/hh);
+  const dx = (W - w*esc2)/2 - x0*esc2, dy = (H - hh*esc2)/2 - y0*esc2;
+  const pts = g.map(p => [((p[1]*k)*esc2+dx).toFixed(1), ((-p[0])*esc2+dy).toFixed(1)]);
+  const d = "M" + pts.map(p => p[0] + " " + p[1]).join(" L");
+  const a = pts[0], b = pts[pts.length-1];
+  return '<div class="amap"><svg viewBox="0 0 ' + W + ' ' + H + '" aria-hidden="true">' +
+    '<path class="ruta" d="' + d + '"/>' +
+    '<circle class="ini" cx="' + a[0] + '" cy="' + a[1] + '" r="4"/>' +
+    '<circle class="fin" cx="' + b[0] + '" cy="' + b[1] + '" r="4"/></svg></div>';
+}
+
+async function loadRuns(){
+  try{
+    const r = await fetch("runs.json?t=" + Date.now(), { cache:"no-store" });
+    if (!r.ok) return false;
+    const j = await r.json();
+    if (!j || !Array.isArray(j.activities)) return false;
+    data.runs = j.activities; data.runsUp = j.updated || null;
+    scheduleSave();
+    if (section === "act") renderActividades();
+    return true;
+  }catch(e){ return false; }
+}
+
+/* ================= vista: actividades por día ================= */
+function renderActividades(){
+  document.documentElement.style.setProperty("--accent", "#FFA84D");
+  const cont = document.getElementById("content");
+  cont.className = "";
+  cont.innerHTML = "";
+
+  const sync = document.createElement("div");
+  sync.className = "sync";
+  const n = (data.runs || []).length;
+  sync.innerHTML = '<span>' + (n ? n + " actividades" + (data.runsUp ? " · " + fmtDate(String(data.runsUp).slice(0,10)) : "")
+                                 : "sin actividades sincronizadas") + '</span>';
+  const rb = document.createElement("button");
+  rb.textContent = "↻ actualizar";
+  rb.onclick = async () => {
+    rb.textContent = "…";
+    const ok = await loadRuns();
+    if (ok) renderActividades();
+    else { rb.textContent = "no disponible"; setTimeout(() => { rb.textContent = "↻ actualizar"; }, 2000); }
+  };
+  sync.appendChild(rb);
+  cont.appendChild(sync);
+
+  const acts = (data.runs || []).slice().sort((a,b) => (a.dt || a.d) < (b.dt || b.d) ? 1 : -1);
+  if (!acts.length){
+    const e = document.createElement("div");
+    e.className = "empty";
+    e.innerHTML = 'Aquí aparecerán tus carreras y salidas,<br>día a día, con ritmo, tiempo y recorrido.';
+    cont.appendChild(e);
+    return;
+  }
+
+  let diaActual = null;
+  acts.forEach(a => {
+    if (a.d !== diaActual){
+      diaActual = a.d;
+      const delDia = acts.filter(x => x.d === a.d);
+      const km = delDia.reduce((s,x) => s + (x.km || 0), 0);
+      const seg = delDia.reduce((s,x) => s + (x.s || 0), 0);
+      const hd = document.createElement("div");
+      hd.className = "diahead";
+      hd.innerHTML = '<span class="f">' + (a.d === TODAY ? "Hoy" : nomDia(a.d) + " " + fmtDate(a.d)) + '</span>' +
+        '<span class="tot">' + [km ? fmtKm(km) : "", fmtDur(seg)].filter(Boolean).join(" · ") + '</span>';
+      cont.appendChild(hd);
+    }
+
+    const c = document.createElement("div");
+    c.className = "acard";
+    let x = '<div class="ahead"><span class="aico">' + icono(a.t) + '</span>';
+    x += '<span class="atit"><span class="aname">' + esc(a.n || a.t || "Actividad") + '</span>';
+    x += '<span class="ahora">' + [fmtHora(a.dt), tipoEs(a.t)].filter(Boolean).join(" · ") + '</span></span></div>';
+
+    const stats = [];
+    if (a.km) stats.push(["distancia", fmtKm(a.km), true]);
+    if (a.s) stats.push(["tiempo", fmtDur(a.s), false]);
+    const rit = fmtRitmo(a.t, a.km, a.s);
+    if (rit) stats.push([A_PIE[a.t] ? "ritmo" : "velocidad", rit, true]);
+    if (a.up) stats.push(["desnivel", Math.round(a.up) + " m+", false]);
+    if (a.hr) stats.push(["pulso", Math.round(a.hr) + " ppm", false]);
+    if (a.l) stats.push(["carga", String(Math.round(a.l)), false]);
+    if (stats.length){
+      x += '<div class="astats">';
+      stats.forEach(s => {
+        x += '<div class="stat' + (s[2] ? " dest" : "") + '"><div class="k">' + s[0] + '</div><div class="v">' + esc(s[1]) + '</div></div>';
+      });
+      x += '</div>';
+    }
+    x += mapaSVG(a.g);
+    c.innerHTML = x;
+    cont.appendChild(c);
+  });
+}
+
 /* ================= selector ================= */
+function renderTabs(){
+  const wrap = document.getElementById("tabs");
+  wrap.innerHTML = "";
+  [["act","Actividades"],["fuerza","Fuerza"]].forEach(t => {
+    const b = document.createElement("button");
+    b.className = section === t[0] ? "on" : "";
+    b.textContent = t[1];
+    b.onclick = () => { section = t[0]; render(); };
+    wrap.appendChild(b);
+  });
+}
+
 function renderPlates(){
   const wrap = document.getElementById("plates");
   wrap.innerHTML = "";
@@ -611,11 +806,12 @@ function renderDay(){
   }
 }
 
-/* ================= vista: sesiones ================= */
+/* ================= vista: diario (fuerza + carreras) ================= */
 function renderHist(){
   document.documentElement.style.setProperty("--accent", "#C9CEDA");
   const cont = document.getElementById("content");
   const rows = [];
+
   PLAN.forEach(day => {
     const names = {}; allEx(day.id).forEach(e => names[e.id] = e.n);
     (data.hist[day.id] || []).forEach((sess,i) => {
@@ -623,25 +819,43 @@ function renderHist(){
       Object.keys(sess.ex || {}).forEach(id => {
         if (exHasData(sess.ex[id])) items.push({ n:names[id] || "Ejercicio", v:fmtSets(sess.ex[id].sets) });
       });
-      if (items.length || sess.mob) rows.push({ date:sess.date, i:i, day:day, items:items, mob:!!sess.mob });
+      if (items.length || sess.mob) rows.push({ k:"s", date:sess.date, i:i, day:day, items:items, mob:!!sess.mob });
     });
   });
-  rows.sort((a,b) => a.date < b.date ? 1 : (a.date > b.date ? -1 : b.i - a.i));
+  rows.sort((x,y) => x.date < y.date ? 1 : (x.date > y.date ? -1 : y.i - x.i));
+
   cont.innerHTML = "";
+
   if (!rows.length){
-    cont.innerHTML = '<div class="empty">Aún no hay sesiones finalizadas.<br>Apunta tus pesos y toca «Finalizar sesión» al acabar.</div>';
+    const e = document.createElement("div");
+    e.className = "empty";
+    e.innerHTML = 'Aún no hay sesiones finalizadas.<br>Apunta tus pesos y toca «Finalizar sesión».';
+    cont.appendChild(e);
     return;
   }
+
   rows.forEach(r => {
     const c = document.createElement("div");
-    c.className = "sesion";
-    let h = '<div class="sesion-head"><span class="sesion-day" style="background:' + r.day.color + '">' + r.day.num + '</span>';
-    h += '<span class="sesion-date">' + (r.date === TODAY ? "hoy · " : "") + fmtDate(r.date) + '</span>';
-    h += '<span class="sesion-count">' + r.items.length + ' ejercicio' + (r.items.length === 1 ? "" : "s") + (r.mob ? " + mov." : "") + '</span></div>';
-    r.items.forEach(it => {
-      h += '<div class="sesion-row"><span class="n">' + esc(it.n) + '</span><span class="v">' + esc(it.v) + '</span></div>';
-    });
-    c.innerHTML = h;
+    if (r.k === "s"){
+      c.className = "sesion";
+      let x = '<div class="sesion-head"><span class="sesion-day" style="background:' + r.day.color + '">' + r.day.num + '</span>';
+      x += '<span class="sesion-date">' + (r.date === TODAY ? "hoy · " : "") + fmtDate(r.date) + '</span>';
+      x += '<span class="sesion-count">' + r.items.length + ' ejercicio' + (r.items.length === 1 ? "" : "s") + (r.mob ? " + mov." : "") + '</span></div>';
+      r.items.forEach(it => {
+        x += '<div class="sesion-row"><span class="n">' + esc(it.n) + '</span><span class="v">' + esc(it.v) + '</span></div>';
+      });
+      c.innerHTML = x;
+    } else {
+      const a = r.a;
+      const det = [fmtKm(a.km), fmtDur(a.s), fmtRitmo(a.t, a.km, a.s), a.up ? Math.round(a.up) + " m+" : "", a.hr ? Math.round(a.hr) + " ppm" : ""]
+        .filter(Boolean).join(" · ");
+      c.className = "sesion act";
+      let x = '<div class="sesion-head"><span class="sesion-day act">' + icono(a.t) + '</span>';
+      x += '<span class="sesion-date">' + (r.date === TODAY ? "hoy · " : "") + fmtDate(r.date) + '</span>';
+      x += '<span class="sesion-count">' + esc(a.l ? "carga " + Math.round(a.l) : tipoEs(a.t)) + '</span></div>';
+      x += '<div class="actline"><span class="n">' + esc(a.n || a.t || "Actividad") + '</span><span class="v">' + esc(det) + '</span></div>';
+      c.innerHTML = x;
+    }
     cont.appendChild(c);
   });
 }
@@ -688,10 +902,22 @@ function renderTabla(){
 
 /* ================= render ================= */
 function render(){
-  renderPlates();
+  renderTabs();
+  const esFuerza = section === "fuerza";
   const daybar = document.querySelector(".daybar");
   const mob = document.getElementById("mobChip");
   const foot = document.getElementById("foot");
+  const plates = document.getElementById("plates");
+
+  plates.style.display = esFuerza ? "flex" : "none";
+  if (!esFuerza){
+    daybar.style.display = "none";
+    mob.style.display = "none";
+    foot.style.display = "none";
+    renderActividades();
+    return;
+  }
+  renderPlates();
   const dayView = currentView === "day";
   daybar.style.display = dayView ? "flex" : "none";
   mob.style.display = dayView ? "flex" : "none";
@@ -711,9 +937,11 @@ function render(){
   await store.init();
   const loaded = await store.load();
   if (loaded && loaded.hist){
-    data = { hist:loaded.hist || {}, cur:loaded.cur || {}, custom:loaded.custom || {} };
+    data = { hist:loaded.hist || {}, cur:loaded.cur || {}, custom:loaded.custom || {},
+             runs:loaded.runs || [], runsUp:loaded.runsUp || null };
   }
   render();
+  loadRuns();
 })();
 </script>
 </body>
