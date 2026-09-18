@@ -1,0 +1,149 @@
+name: Actividades
+
+on:
+  schedule:
+    - cron: "0 5,11,17 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descargar actividades de Intervals.icu
+        env:
+          ICU_ID: ${{ secrets.INTERVALS_ATHLETE_ID }}
+          ICU_KEY: ${{ secrets.INTERVALS_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import base64, datetime, json, os, re, sys, time, urllib.error, urllib.request
+
+          aid = re.sub(r"\s+", "", os.environ.get("ICU_ID") or "")
+          key = re.sub(r"\s+", "", os.environ.get("ICU_KEY") or "")
+          if not aid or not key:
+              sys.exit("Faltan los secretos INTERVALS_ATHLETE_ID / INTERVALS_API_KEY")
+          if not aid.startswith("i"):
+              aid = "i" + aid
+          print("Atleta:", aid, "| clave de", len(key), "caracteres")
+
+          auth = base64.b64encode(("API_KEY:" + key).encode()).decode()
+          CAB = {"Authorization": "Basic " + auth,
+                 "Accept": "application/json",
+                 "User-Agent": "fuerza-app/1.0"}
+
+          def pedir(url, tolerante=False):
+              req = urllib.request.Request(url, headers=CAB)
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as r:
+                      return json.load(r)
+              except urllib.error.HTTPError as e:
+                  if tolerante:
+                      return None
+                  print("Respuesta", e.code, e.read().decode("utf-8", "replace")[:300])
+                  sys.exit("Intervals.icu rechaza la peticion")
+              except Exception as e:
+                  if tolerante:
+                      return None
+                  sys.exit("Error de red: %s" % e)
+
+          hoy = datetime.date.today()
+          desde = hoy - datetime.timedelta(days=200)
+          acts = pedir("https://intervals.icu/api/v1/athlete/%s/activities?oldest=%s&newest=%s"
+                       % (aid, desde.isoformat(), hoy.isoformat()))
+          print("Actividades recibidas:", len(acts))
+
+          # trazados ya descargados en ejecuciones anteriores
+          previos = {}
+          try:
+              with open("runs.json", encoding="utf-8") as f:
+                  for a in json.load(f).get("activities", []):
+                      if a.get("g"):
+                          previos[str(a.get("id"))] = a["g"]
+          except Exception:
+              pass
+
+          def num(v):
+              try:
+                  return round(float(v), 2)
+              except (TypeError, ValueError):
+                  return None
+
+          def trazado(aid_act):
+              """Devuelve hasta 60 puntos [lat,lon] redondeados."""
+              d = pedir("https://intervals.icu/api/v1/activity/%s/streams.json?types=latlng" % aid_act,
+                        tolerante=True)
+              if not d:
+                  return None
+              pts = None
+              if isinstance(d, list):
+                  for s in d:
+                      if isinstance(s, dict) and s.get("type") == "latlng":
+                          pts = s.get("data")
+              elif isinstance(d, dict):
+                  pts = (d.get("latlng") or {}).get("data") if isinstance(d.get("latlng"), dict) else d.get("latlng")
+              if not pts:
+                  return None
+              pts = [p for p in pts if isinstance(p, (list, tuple)) and len(p) == 2
+                     and isinstance(p[0], (int, float)) and isinstance(p[1], (int, float))]
+              if len(pts) < 10:
+                  return None
+              paso = max(1, len(pts) // 60)
+              finos = pts[::paso][:60]
+              return [[round(p[0], 5), round(p[1], 5)] for p in finos]
+
+          salida = []
+          for a in acts:
+              cuando = a.get("start_date_local") or ""
+              if not cuando:
+                  continue
+              dist = num(a.get("distance"))
+              salida.append({
+                  "id": a.get("id"),
+                  "d": cuando[:10],
+                  "dt": cuando,
+                  "t": a.get("type") or "Other",
+                  "n": a.get("name") or "",
+                  "km": round(dist / 1000.0, 2) if dist else None,
+                  "s": a.get("moving_time") or a.get("elapsed_time"),
+                  "up": num(a.get("total_elevation_gain")),
+                  "hr": num(a.get("average_heartrate")),
+                  "l": num(a.get("icu_training_load")),
+              })
+
+          salida.sort(key=lambda x: x["dt"], reverse=True)
+          salida = salida[:300]
+
+          nuevos = 0
+          for a in salida[:70]:
+              clave = str(a["id"])
+              if clave in previos:
+                  a["g"] = previos[clave]
+                  continue
+              if nuevos >= 40:
+                  continue
+              g = trazado(a["id"])
+              if g:
+                  a["g"] = g
+                  nuevos += 1
+                  time.sleep(0.3)
+          print("Trazados nuevos:", nuevos, "| reutilizados:", sum(1 for a in salida if a.get("g")) - nuevos)
+
+          datos = {"updated": datetime.datetime.now(datetime.timezone.utc)
+                                .replace(microsecond=0, tzinfo=None).isoformat() + "Z",
+                   "activities": salida}
+          with open("runs.json", "w", encoding="utf-8") as f:
+              json.dump(datos, f, ensure_ascii=False, separators=(",", ":"))
+          print("Guardadas:", len(salida), "actividades ·", os.path.getsize("runs.json") // 1024, "KB")
+          PY
+
+      - name: Guardar en el repositorio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add runs.json
+          git diff --staged --quiet || git commit -m "Actualizar actividades"
+          git push
