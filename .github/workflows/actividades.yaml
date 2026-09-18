@@ -19,15 +19,142 @@ jobs:
           ICU_ID: ${{ secrets.INTERVALS_ATHLETE_ID }}
           ICU_KEY: ${{ secrets.INTERVALS_API_KEY }}
         run: |
-          DESDE=$(date -d '-200 days' +%F)
-          HOY=$(date +%F)
-          URL="https://intervals.icu/api/v1/athlete/$ICU_ID/activities?oldest=$DESDE&newest=$HOY"
-          CODE=$(curl -sS -u "API_KEY:$ICU_KEY" -A "fuerza-app/1.0" -H "Accept: application/json" -o raw.json -w '%{http_code}' "$URL")
-          echo "Atleta $ICU_ID · respuesta HTTP $CODE"
-          if [ "$CODE" != "200" ]; then echo "--- respuesta ---"; head -c 300 raw.json; echo; echo "Revisa el secreto INTERVALS_API_KEY (clave activa en Intervals) y el ID del atleta."; exit 1; fi
-          jq -c '{updated: (now | todate), activities: [.[] | select(.start_date_local != null) | {id: .id, d: .start_date_local[0:10], t: .type, n: .name, km: (if .distance then ((.distance / 10 | round) / 100) else null end), s: (.moving_time // .elapsed_time), up: .total_elevation_gain, hr: .average_heartrate, l: .icu_training_load}]}' raw.json > runs.json
-          rm -f raw.json
-          echo "Actividades: $(jq '.activities | length' runs.json)"
+          python3 - <<'PY'
+          import base64, datetime, json, os, re, sys, time, urllib.error, urllib.request
+
+          aid = re.sub(r"\s+", "", os.environ.get("ICU_ID") or "")
+          key = re.sub(r"\s+", "", os.environ.get("ICU_KEY") or "")
+          if not aid or not key:
+              sys.exit("Faltan los secretos INTERVALS_ATHLETE_ID / INTERVALS_API_KEY")
+          if not aid.startswith("i"):
+              aid = "i" + aid
+          print("Atleta:", aid, "| clave de", len(key), "caracteres")
+
+          auth = base64.b64encode(("API_KEY:" + key).encode()).decode()
+          CAB = {"Authorization": "Basic " + auth,
+                 "Accept": "application/json",
+                 "User-Agent": "fuerza-app/1.0"}
+
+          def pedir(url, tolerante=False):
+              req = urllib.request.Request(url, headers=CAB)
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as r:
+                      return json.load(r)
+              except urllib.error.HTTPError as e:
+                  if tolerante:
+                      return None
+                  print("Respuesta", e.code, e.read().decode("utf-8", "replace")[:300])
+                  sys.exit("Intervals.icu rechaza la peticion")
+              except Exception as e:
+                  if tolerante:
+                      return None
+                  sys.exit("Error de red: %s" % e)
+
+          hoy = datetime.date.today()
+          desde = hoy - datetime.timedelta(days=200)
+          acts = pedir("https://intervals.icu/api/v1/athlete/%s/activities?oldest=%s&newest=%s"
+                       % (aid, desde.isoformat(), hoy.isoformat()))
+          print("Actividades recibidas:", len(acts))
+
+          # trazados ya descargados en ejecuciones anteriores
+          previos = {}
+          try:
+              with open("runs.json", encoding="utf-8") as f:
+                  for a in json.load(f).get("activities", []):
+                      if a.get("g"):
+                          previos[str(a.get("id"))] = a["g"]
+          except Exception:
+              pass
+
+          def num(v):
+              try:
+                  return round(float(v), 2)
+              except (TypeError, ValueError):
+                  return None
+
+          def trazado(aid_act):
+              """Devuelve hasta 60 puntos [lat,lon]. Intervals guarda la latitud en
+              'data' y la longitud en 'data2', pero admitimos otros formatos."""
+              d = pedir("https://intervals.icu/api/v1/activity/%s/streams.json?types=latlng,lat,lng"
+                        % aid_act, tolerante=True)
+              if not d:
+                  return None
+              flujos = d if isinstance(d, list) else (list(d.values()) if isinstance(d, dict) else [])
+              lat = lon = pares = None
+              for s in flujos:
+                  if not isinstance(s, dict):
+                      continue
+                  tipo = s.get("type") or s.get("name") or ""
+                  dat, dat2 = s.get("data"), s.get("data2")
+                  if tipo == "latlng":
+                      if dat and dat2 and len(dat) == len(dat2):
+                          lat, lon = dat, dat2
+                      elif dat and isinstance(dat[0], (list, tuple)):
+                          pares = dat
+                      elif dat and isinstance(dat[0], dict):
+                          pares = [[p.get("lat"), p.get("lng") or p.get("lon")] for p in dat]
+                  elif tipo in ("lat", "latitude"):
+                      lat = dat
+                  elif tipo in ("lng", "lon", "longitude"):
+                      lon = dat
+              if pares is None and lat and lon:
+                  pares = list(zip(lat, lon))
+              if not pares:
+                  return None
+              limpios = [p for p in pares
+                         if p and len(p) == 2
+                         and isinstance(p[0], (int, float)) and isinstance(p[1], (int, float))
+                         and abs(p[0]) <= 90 and abs(p[1]) <= 180
+                         and (p[0] != 0 or p[1] != 0)]
+              if len(limpios) < 10:
+                  return None
+              paso = max(1, len(limpios) // 60)
+              return [[round(p[0], 5), round(p[1], 5)] for p in limpios[::paso][:60]]
+
+          salida = []
+          for a in acts:
+              cuando = a.get("start_date_local") or ""
+              if not cuando:
+                  continue
+              dist = num(a.get("distance"))
+              salida.append({
+                  "id": a.get("id"),
+                  "d": cuando[:10],
+                  "dt": cuando,
+                  "t": a.get("type") or "Other",
+                  "n": a.get("name") or "",
+                  "km": round(dist / 1000.0, 2) if dist else None,
+                  "s": a.get("moving_time") or a.get("elapsed_time"),
+                  "up": num(a.get("total_elevation_gain")),
+                  "hr": num(a.get("average_heartrate")),
+                  "l": num(a.get("icu_training_load")),
+              })
+
+          salida.sort(key=lambda x: x["dt"], reverse=True)
+          salida = salida[:300]
+
+          nuevos = 0
+          for a in salida[:70]:
+              clave = str(a["id"])
+              if clave in previos:
+                  a["g"] = previos[clave]
+                  continue
+              if nuevos >= 40:
+                  continue
+              g = trazado(a["id"])
+              if g:
+                  a["g"] = g
+                  nuevos += 1
+                  time.sleep(0.3)
+          print("Trazados nuevos:", nuevos, "| reutilizados:", sum(1 for a in salida if a.get("g")) - nuevos)
+
+          datos = {"updated": datetime.datetime.now(datetime.timezone.utc)
+                                .replace(microsecond=0, tzinfo=None).isoformat() + "Z",
+                   "activities": salida}
+          with open("runs.json", "w", encoding="utf-8") as f:
+              json.dump(datos, f, ensure_ascii=False, separators=(",", ":"))
+          print("Guardadas:", len(salida), "actividades ·", os.path.getsize("runs.json") // 1024, "KB")
+          PY
 
       - name: Guardar en el repositorio
         run: |
