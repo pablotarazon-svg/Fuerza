@@ -28,7 +28,7 @@ jobs:
               sys.exit("Faltan los secretos INTERVALS_ATHLETE_ID / INTERVALS_API_KEY")
           if not aid.startswith("i"):
               aid = "i" + aid
-          print("VERSION 2 · Atleta:", aid, "| clave de", len(key), "caracteres")
+          print("VERSION 4 · Atleta:", aid, "| clave de", len(key), "caracteres")
 
           auth = base64.b64encode(("API_KEY:" + key).encode()).decode()
           CAB = {"Authorization": "Basic " + auth,
@@ -59,15 +59,17 @@ jobs:
               sys.exit("No se pudo descargar la lista de actividades (HTTP %s)" % cod)
           print("Actividades recibidas:", len(acts))
 
-          previos = {}
+          previos, previasLp = {}, {}
           try:
               with open("runs.json", encoding="utf-8") as f:
                   for a in json.load(f).get("activities", []):
                       if a.get("g"):
                           previos[str(a.get("id"))] = a["g"]
+                      if a.get("lp"):
+                          previasLp[str(a.get("id"))] = a["lp"]
           except Exception:
               pass
-          print("Recorridos ya guardados:", len(previos))
+          print("Guardados ya: recorridos", len(previos), "· series", len(previasLp))
 
           def num(v):
               try:
@@ -111,6 +113,59 @@ jobs:
               paso = max(1, len(limpios) // 60)
               return [[round(p[0], 5), round(p[1], 5)] for p in limpios[::paso][:60]]
 
+          def series(ident, avisar=False):
+              """Devuelve la lista de series/laps resumidas, o None."""
+              d, cod = pedir("https://intervals.icu/api/v1/activity/%s/intervals" % ident,
+                             avisar=avisar)
+              if not d:
+                  return None
+              trozos = []
+              if isinstance(d, dict):
+                  for clave in ("icu_intervals", "laps", "intervals"):
+                      v = d.get(clave)
+                      if isinstance(v, list) and v:
+                          trozos = v
+                          if avisar:
+                              print("DIAG: series en el campo", clave, "·", len(v))
+                          break
+                  if avisar and not trozos:
+                      print("DIAG: claves recibidas:", list(d.keys())[:15])
+              elif isinstance(d, list):
+                  trozos = d
+              if not trozos:
+                  return None
+              if avisar and isinstance(trozos[0], dict):
+                  print("DIAG: campos de una serie:", sorted(trozos[0].keys())[:25])
+
+              def n(v):
+                  try:
+                      f = float(v)
+                      return round(f, 2) if f == f else None
+                  except (TypeError, ValueError):
+                      return None
+
+              fuera = []
+              for i, t in enumerate(trozos):
+                  if not isinstance(t, dict):
+                      continue
+                  seg = t.get("moving_time") or t.get("elapsed_time")
+                  if not seg:
+                      continue
+                  dist = n(t.get("distance"))
+                  np_ = n(t.get("weighted_average_watts")) or n(t.get("icu_weighted_avg_watts")) \
+                        or n(t.get("average_watts")) or n(t.get("icu_average_watts"))
+                  fuera.append({
+                      "n": t.get("label") or t.get("name") or ("S" + str(i+1)),
+                      "tp": (t.get("type") or "").upper()[:4],
+                      "s": int(seg),
+                      "km": round(dist / 1000.0, 3) if dist else None,
+                      "w": int(np_) if np_ else None,
+                      "hr": int(n(t.get("average_heartrate")) or 0) or None,
+                  })
+                  if len(fuera) >= 40:
+                      break
+              return fuera or None
+
           def direcciones(ident):
               corto = str(ident)[1:] if str(ident).startswith("i") else str(ident)
               return [
@@ -153,6 +208,8 @@ jobs:
                   "up": num(a.get("total_elevation_gain")),
                   "hr": num(a.get("average_heartrate")),
                   "l": num(a.get("icu_training_load")),
+                  "np": num(a.get("icu_weighted_avg_watts")) or num(a.get("weighted_average_watts")),
+                  "pw": num(a.get("icu_average_watts")) or num(a.get("average_watts")),
               })
 
           salida.sort(key=lambda x: x["dt"], reverse=True)
@@ -164,25 +221,37 @@ jobs:
               g = trazado(conKm[0]["id"], avisar=True)
               if g:
                   conKm[0]["g"] = g
+              print("DIAG: series de", conKm[0]["id"])
+              lp = series(conKm[0]["id"], avisar=True)
+              print("DIAG: series encontradas:", len(lp) if lp else 0)
+              if lp:
+                  conKm[0]["lp"] = lp
 
           nuevos = sum(1 for a in salida if a.get("g"))
+          nuevasLp = sum(1 for a in salida if a.get("lp"))
           for a in salida[:70]:
-              if a.get("g"):
-                  continue
               clave = str(a["id"])
-              if clave in previos:
-                  a["g"] = previos[clave]
-                  continue
-              if nuevos >= 40:
-                  continue
-              g = trazado(a["id"])
-              if g:
-                  a["g"] = g
-                  nuevos += 1
-                  time.sleep(0.3)
+              if not a.get("g"):
+                  if clave in previos:
+                      a["g"] = previos[clave]
+                  elif nuevos < 40:
+                      g = trazado(a["id"])
+                      if g:
+                          a["g"] = g
+                          nuevos += 1
+                          time.sleep(0.2)
+              if not a.get("lp"):
+                  if clave in previasLp:
+                      a["lp"] = previasLp[clave]
+                  elif nuevasLp < 40:
+                      lp = series(a["id"])
+                      if lp:
+                          a["lp"] = lp
+                          nuevasLp += 1
+                          time.sleep(0.2)
 
-          total = sum(1 for a in salida if a.get("g"))
-          print("Recorridos: nuevos", nuevos, "· total con mapa", total)
+          print("Recorridos: nuevos", nuevos, "· total", sum(1 for a in salida if a.get("g")))
+          print("Series: nuevas", nuevasLp, "· total", sum(1 for a in salida if a.get("lp")))
 
           datos = {"updated": datetime.datetime.now(datetime.timezone.utc)
                                 .replace(microsecond=0, tzinfo=None).isoformat() + "Z",
