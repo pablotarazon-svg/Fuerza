@@ -1,0 +1,281 @@
+name: Actividades v2
+
+on:
+  schedule:
+    - cron: "0 5,11,17 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descargar actividades y recorridos
+        env:
+          ICU_ID: ${{ secrets.INTERVALS_ATHLETE_ID }}
+          ICU_KEY: ${{ secrets.INTERVALS_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import base64, datetime, json, os, re, sys, time, urllib.error, urllib.request
+
+          aid = re.sub(r"\s+", "", os.environ.get("ICU_ID") or "")
+          key = re.sub(r"\s+", "", os.environ.get("ICU_KEY") or "")
+          if not aid or not key:
+              sys.exit("Faltan los secretos INTERVALS_ATHLETE_ID / INTERVALS_API_KEY")
+          if not aid.startswith("i"):
+              aid = "i" + aid
+          print("VERSION 5 · Atleta:", aid, "| clave de", len(key), "caracteres")
+
+          auth = base64.b64encode(("API_KEY:" + key).encode()).decode()
+          CAB = {"Authorization": "Basic " + auth,
+                 "Accept": "application/json",
+                 "User-Agent": "fuerza-app/1.0"}
+
+          def pedir(url, avisar=False):
+              """Devuelve (datos, codigo). codigo 0 = error de red."""
+              req = urllib.request.Request(url, headers=CAB)
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as r:
+                      return json.load(r), 200
+              except urllib.error.HTTPError as e:
+                  cuerpo = e.read().decode("utf-8", "replace")[:200]
+                  if avisar:
+                      print("   -> HTTP", e.code, cuerpo)
+                  return None, e.code
+              except Exception as e:
+                  if avisar:
+                      print("   -> error:", e)
+                  return None, 0
+
+          hoy = datetime.date.today()
+          desde = hoy - datetime.timedelta(days=200)
+          acts, cod = pedir("https://intervals.icu/api/v1/athlete/%s/activities?oldest=%s&newest=%s"
+                            % (aid, desde.isoformat(), hoy.isoformat()), avisar=True)
+          if acts is None:
+              sys.exit("No se pudo descargar la lista de actividades (HTTP %s)" % cod)
+          print("Actividades recibidas:", len(acts))
+
+          previos, previasLp = {}, {}
+          try:
+              with open("runs.json", encoding="utf-8") as f:
+                  for a in json.load(f).get("activities", []):
+                      if a.get("g"):
+                          previos[str(a.get("id"))] = a["g"]
+                      if a.get("lp"):
+                          previasLp[str(a.get("id"))] = a["lp"]
+          except Exception:
+              pass
+          print("Guardados ya: recorridos", len(previos), "· series", len(previasLp))
+
+          def num(v):
+              try:
+                  return round(float(v), 2)
+              except (TypeError, ValueError):
+                  return None
+
+          def puntos_de(d):
+              """Saca los pares [lat,lon] de cualquiera de los formatos posibles."""
+              if not d:
+                  return None
+              flujos = d if isinstance(d, list) else (list(d.values()) if isinstance(d, dict) else [])
+              lat = lon = pares = None
+              for s in flujos:
+                  if not isinstance(s, dict):
+                      continue
+                  tipo = s.get("type") or s.get("name") or ""
+                  dat, dat2 = s.get("data"), s.get("data2")
+                  if tipo == "latlng":
+                      if dat and dat2 and len(dat) == len(dat2):
+                          lat, lon = dat, dat2
+                      elif dat and isinstance(dat[0], (list, tuple)):
+                          pares = dat
+                      elif dat and isinstance(dat[0], dict):
+                          pares = [[p.get("lat"), p.get("lng") or p.get("lon")] for p in dat]
+                  elif tipo in ("lat", "latitude"):
+                      lat = dat
+                  elif tipo in ("lng", "lon", "longitude"):
+                      lon = dat
+              if pares is None and lat and lon:
+                  pares = list(zip(lat, lon))
+              if not pares:
+                  return None
+              limpios = [p for p in pares
+                         if p and len(p) == 2
+                         and isinstance(p[0], (int, float)) and isinstance(p[1], (int, float))
+                         and abs(p[0]) <= 90 and abs(p[1]) <= 180
+                         and (p[0] != 0 or p[1] != 0)]
+              if len(limpios) < 10:
+                  return None
+              paso = max(1, len(limpios) // 60)
+              return [[round(p[0], 5), round(p[1], 5)] for p in limpios[::paso][:60]]
+
+          def series(ident, avisar=False):
+              """Devuelve la lista de series/laps resumidas, o None."""
+              d, cod = pedir("https://intervals.icu/api/v1/activity/%s/intervals" % ident,
+                             avisar=avisar)
+              if not d:
+                  return None
+              trozos = []
+              if isinstance(d, dict):
+                  for clave in ("icu_intervals", "laps", "intervals"):
+                      v = d.get(clave)
+                      if isinstance(v, list) and v:
+                          trozos = v
+                          if avisar:
+                              print("DIAG: series en el campo", clave, "·", len(v))
+                          break
+                  if avisar and not trozos:
+                      print("DIAG: claves recibidas:", list(d.keys())[:15])
+              elif isinstance(d, list):
+                  trozos = d
+              if not trozos:
+                  return None
+              if avisar and isinstance(trozos[0], dict):
+                  print("DIAG: campos de una serie:", sorted(trozos[0].keys())[:25])
+
+              def n(v):
+                  try:
+                      f = float(v)
+                      return round(f, 2) if f == f else None
+                  except (TypeError, ValueError):
+                      return None
+
+              fuera = []
+              for i, t in enumerate(trozos):
+                  if not isinstance(t, dict):
+                      continue
+                  seg = t.get("moving_time") or t.get("elapsed_time")
+                  if not seg:
+                      continue
+                  dist = n(t.get("distance"))
+                  np_ = n(t.get("weighted_average_watts")) or n(t.get("icu_weighted_avg_watts")) \
+                        or n(t.get("average_watts")) or n(t.get("icu_average_watts"))
+                  fuera.append({
+                      "n": t.get("label") or t.get("name") or ("S" + str(i+1)),
+                      "tp": (t.get("type") or "").upper()[:4],
+                      "s": int(seg),
+                      "km": round(dist / 1000.0, 3) if dist else None,
+                      "w": int(np_) if np_ else None,
+                      "hr": int(n(t.get("average_heartrate")) or 0) or None,
+                  })
+                  if len(fuera) >= 40:
+                      break
+              return fuera or None
+
+          def direcciones(ident):
+              corto = str(ident)[1:] if str(ident).startswith("i") else str(ident)
+              return [
+                  "https://intervals.icu/api/v1/activity/%s/streams.json?types=latlng" % ident,
+                  "https://intervals.icu/api/v1/activity/%s/streams.json" % ident,
+                  "https://intervals.icu/api/v1/activity/%s/streams" % ident,
+                  "https://intervals.icu/api/v1/activity/%s/streams.json" % corto,
+              ]
+
+          def trazado(ident, avisar=False):
+              for url in direcciones(ident):
+                  if avisar:
+                      print("DIAG: probando", url.replace("https://intervals.icu", ""))
+                  d, cod = pedir(url, avisar=avisar)
+                  if d:
+                      if avisar:
+                          tipos = [s.get("type") for s in d if isinstance(s, dict)] if isinstance(d, list) else list(d)[:10]
+                          print("DIAG: respuesta OK · contenido:", tipos)
+                      g = puntos_de(d)
+                      if avisar:
+                          print("DIAG: puntos extraidos:", len(g) if g else 0)
+                      if g:
+                          return g
+              return None
+
+          salida = []
+          for a in acts:
+              cuando = a.get("start_date_local") or ""
+              if not cuando:
+                  continue
+              dist = num(a.get("distance"))
+              salida.append({
+                  "id": a.get("id"),
+                  "d": cuando[:10],
+                  "dt": cuando,
+                  "t": a.get("type") or "Other",
+                  "n": a.get("name") or "",
+                  "km": round(dist / 1000.0, 2) if dist else None,
+                  "s": a.get("moving_time") or a.get("elapsed_time"),
+                  "up": num(a.get("total_elevation_gain")),
+                  "hr": num(a.get("average_heartrate")),
+                  "l": num(a.get("icu_training_load")),
+                  "np": (num(a.get("icu_weighted_avg_watts")) or num(a.get("weighted_average_watts"))
+                         or num(a.get("normalized_watts")) or num(a.get("icu_np"))),
+                  "pw": num(a.get("icu_average_watts")) or num(a.get("average_watts")),
+              })
+
+          salida.sort(key=lambda x: x["dt"], reverse=True)
+          salida = salida[:300]
+
+          bicis = [a for a in acts if (a.get("type") or "").endswith("Ride")]
+          if bicis:
+              campos = sorted(k for k in bicis[0].keys()
+                              if "watt" in k.lower() or "np" in k.lower() or "power" in k.lower())
+              print("DIAG bici:", bicis[0].get("name"))
+              for k in campos:
+                  print("   ", k, "=", bicis[0].get(k))
+          else:
+              print("DIAG: no hay actividades de bici en el periodo")
+
+          conKm = [a for a in salida if a.get("km")]
+          if conKm:
+              print("DIAG: prueba con", conKm[0]["id"], "-", conKm[0]["n"])
+              g = trazado(conKm[0]["id"], avisar=True)
+              if g:
+                  conKm[0]["g"] = g
+              print("DIAG: series de", conKm[0]["id"])
+              lp = series(conKm[0]["id"], avisar=True)
+              print("DIAG: series encontradas:", len(lp) if lp else 0)
+              if lp:
+                  conKm[0]["lp"] = lp
+
+          nuevos = sum(1 for a in salida if a.get("g"))
+          nuevasLp = sum(1 for a in salida if a.get("lp"))
+          for a in salida[:70]:
+              clave = str(a["id"])
+              if not a.get("g"):
+                  if clave in previos:
+                      a["g"] = previos[clave]
+                  elif nuevos < 40:
+                      g = trazado(a["id"])
+                      if g:
+                          a["g"] = g
+                          nuevos += 1
+                          time.sleep(0.2)
+              if not a.get("lp"):
+                  if clave in previasLp:
+                      a["lp"] = previasLp[clave]
+                  elif nuevasLp < 40:
+                      lp = series(a["id"])
+                      if lp:
+                          a["lp"] = lp
+                          nuevasLp += 1
+                          time.sleep(0.2)
+
+          print("Recorridos: nuevos", nuevos, "· total", sum(1 for a in salida if a.get("g")))
+          print("Series: nuevas", nuevasLp, "· total", sum(1 for a in salida if a.get("lp")))
+
+          datos = {"updated": datetime.datetime.now(datetime.timezone.utc)
+                                .replace(microsecond=0, tzinfo=None).isoformat() + "Z",
+                   "activities": salida}
+          with open("runs.json", "w", encoding="utf-8") as f:
+              json.dump(datos, f, ensure_ascii=False, separators=(",", ":"))
+          print("Guardadas:", len(salida), "actividades ·", os.path.getsize("runs.json") // 1024, "KB")
+          PY
+
+      - name: Guardar en el repositorio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add runs.json
+          git diff --staged --quiet || git commit -m "Actualizar actividades"
+          git push
