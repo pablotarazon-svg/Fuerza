@@ -798,15 +798,42 @@ function renderActividades(){
     x += '<span class="ahora">' + [fmtHora(a.dt), tipoEs(a.t)].filter(Boolean).join(" · ") + '</span></span></div>';
 
     const stats = [];
-    if (a.km) stats.push(["distancia", fmtKm(a.km), true]);
-    if (a.s) stats.push(["tiempo", fmtDur(a.s), false]);
-    const rit = fmtRitmo(a.t, a.km, a.s);
-    if (rit) stats.push([A_PIE[a.t] ? "ritmo" : "velocidad", rit, true]);
-    if (a.np) stats.push(["np", Math.round(a.np) + " W", true]);
-    else if (a.pw) stats.push(["potencia", Math.round(a.pw) + " W", true]);
-    if (a.hr) stats.push(["pulso medio", Math.round(a.hr) + " ppm", false]);
-    if (a.up) stats.push(["desnivel", Math.round(a.up) + " m+", false]);
-    if (a.l) stats.push(["carga", String(Math.round(a.l)), false]);
+    const dep = deporteDe(a.t);
+    const km = a.km ? ["distancia", fmtKm(a.km), true] : null;
+    const tiempo = a.s ? ["tiempo", fmtDur(a.s), false] : null;
+    const pulso = a.hr ? ["pulso medio", Math.round(a.hr) + " ppm", false] : null;
+    const subida = a.up ? ["desnivel", Math.round(a.up) + " m+", false] : null;
+    const ritmo = fmtRitmo(a.t, a.km, a.s);
+
+    if (dep === "correr"){
+      if (km) stats.push(km);
+      if (tiempo) stats.push(tiempo);
+      if (ritmo) stats.push(["ritmo", ritmo, true]);
+      if (pulso) stats.push(pulso);
+      if (subida) stats.push(subida);
+    } else if (dep === "bici"){
+      if (km) stats.push(km);
+      if (tiempo) stats.push(tiempo);
+      stats.push(["np", a.np ? Math.round(a.np) + " W" : "—", true]);
+      if (a.pw) stats.push(["potencia media", Math.round(a.pw) + " W", false]);
+      if (pulso) stats.push(pulso);
+      if (ritmo) stats.push(["velocidad", ritmo, false]);
+      if (subida) stats.push(subida);
+    } else if (dep === "nadar"){
+      if (a.km) stats.push(["distancia", a.km < 3 ? Math.round(a.km*1000) + " m" : fmtKm(a.km), true]);
+      if (tiempo) stats.push(tiempo);
+      if (ritmo) stats.push(["ritmo", ritmo, true]);
+      if (pulso) stats.push(pulso);
+    } else if (dep === "fuerza"){
+      if (tiempo) stats.push(tiempo);
+      if (pulso) stats.push(pulso);
+    } else {
+      if (km) stats.push(km);
+      if (tiempo) stats.push(tiempo);
+      if (ritmo) stats.push(["ritmo", ritmo, true]);
+      if (pulso) stats.push(pulso);
+      if (subida) stats.push(subida);
+    }
     if (stats.length){
       x += '<div class="astats">';
       stats.forEach(s => {
