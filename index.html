@@ -82,6 +82,33 @@
   .stat .v{font-family:var(--mono); font-size:14.5px; color:var(--chalk); margin-top:2px; white-space:nowrap;
     overflow:hidden; text-overflow:ellipsis}
   .stat.dest .v{color:var(--fig-load)}
+  .sem{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:13px; margin-bottom:11px}
+  .sem.viva{border-color:var(--fig-load)}
+  .semh{display:flex; align-items:baseline; gap:9px; margin-bottom:10px}
+  .semh .r{font-family:var(--disp); font-size:16px; font-weight:600; letter-spacing:.05em; text-transform:uppercase}
+  .semh .f{margin-left:auto; font-family:var(--mono); font-size:11px; color:var(--faint)}
+  .dep{display:flex; align-items:center; gap:9px; padding:7px 0; border-top:1px solid var(--line)}
+  .dep .i{width:26px; text-align:center; font-size:15px; flex:none}
+  .dep .nm{font-size:13.5px; color:var(--muted); flex:1}
+  .dep .v{font-family:var(--mono); font-size:13.5px; color:var(--chalk); white-space:nowrap}
+  .dep .v b{color:var(--fig-load); font-weight:600}
+  .semtot{display:flex; gap:8px; margin-top:11px}
+  .semtot div{flex:1; background:var(--surface2); border-radius:10px; padding:8px 10px}
+  .semtot .k{font-family:var(--mono); font-size:9.5px; color:var(--faint); letter-spacing:.08em; text-transform:uppercase}
+  .semtot .v{font-family:var(--mono); font-size:16px; color:var(--chalk); margin-top:2px}
+
+  .lapbtn{margin-top:10px; width:100%; border:1px solid var(--line); background:var(--surface2); color:var(--muted);
+    border-radius:10px; padding:9px; font-size:13px; font-family:var(--mono); cursor:pointer}
+  .laps{margin-top:8px; display:none}
+  .laps.on{display:block}
+  .laph, .lapr{display:grid; gap:6px; padding:5px 2px; font-family:var(--mono); font-size:12.5px}
+  .laph{color:var(--faint); font-size:10px; letter-spacing:.08em; text-transform:uppercase; border-bottom:1px solid var(--line)}
+  .lapr{border-top:1px solid var(--line)}
+  .lapr .d{color:var(--chalk)}
+  .lapr.rec{opacity:.55}
+  .lapr .dest{color:var(--fig-load)}
+  .lapr .et{color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+
   .amap{margin-top:10px; background:var(--surface2); border-radius:11px; padding:6px; cursor:pointer; position:relative}
   .amap .lupa{position:absolute; right:9px; bottom:7px; font-size:11px; color:var(--faint);
     font-family:var(--mono); background:rgba(21,23,26,.75); border-radius:7px; padding:2px 7px}
@@ -508,6 +535,32 @@ const ICONOS = { Run:"🏃", TrailRun:"🏃", Ride:"🚴", VirtualRide:"🚴", V
   Swim:"🏊", Hike:"🥾", Walk:"🚶", WeightTraining:"🏋️", Workout:"💪", Rowing:"🚣",
   AlpineSki:"🎿", Yoga:"🧘", Elliptical:"🌀", Other:"•" };
 function icono(t){ return ICONOS[t] || "•"; }
+const DEPORTES = [
+  { k:"bici",   n:"Bici",    i:"🚴", km:true,
+    t:["Ride","VirtualRide","GravelRide","MountainBikeRide","EBikeRide","EMountainBikeRide","Handcycle","Velomobile"] },
+  { k:"correr", n:"Correr",  i:"🏃", km:true,
+    t:["Run","TrailRun","VirtualRun","Treadmill"] },
+  { k:"nadar",  n:"Nadar",   i:"🏊", km:true,
+    t:["Swim","OpenWaterSwim"] },
+  { k:"fuerza", n:"Fuerza",  i:"🏋️", km:false,
+    t:["WeightTraining","Workout","Crossfit","Strength","HIIT"] }
+];
+function deporteDe(t){
+  for (const d of DEPORTES) if (d.t.indexOf(t) >= 0) return d.k;
+  return "otros";
+}
+function lunesDe(iso){
+  const p = iso.split("-");
+  const d = new Date(parseInt(p[0],10), parseInt(p[1],10)-1, parseInt(p[2],10));
+  const w = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - w);
+  return isoLocal(d);
+}
+function sumaDur(s){
+  if (!s) return "0h00";
+  const h = Math.floor(s/3600), m = Math.round((s%3600)/60);
+  return h + "h" + String(m).padStart(2,"0");
+}
 const TIPOS = { Run:"Carrera", TrailRun:"Trail", VirtualRun:"Cinta", Ride:"Bici", VirtualRide:"Rodillo",
   Swim:"Natación", Hike:"Senderismo", Walk:"Caminata", WeightTraining:"Fuerza", Workout:"Entreno",
   Rowing:"Remo", Yoga:"Yoga", Elliptical:"Elíptica", AlpineSki:"Esquí", Other:"Otro" };
@@ -520,12 +573,16 @@ function fmtDur(s){
 }
 const A_PIE = { Run:1, TrailRun:1, VirtualRun:1, Hike:1, Walk:1 };
 function fmtRitmo(t, km, s){
-  if (!km || !s || km < 0.3) return "";
+  if (!km || !s || km < 0.02) return "";
   if (A_PIE[t]){
     const p = (s/60) / km, mm = Math.floor(p), ss = Math.round((p-mm)*60);
     return mm + ":" + String(ss).padStart(2,"0") + "/km";
   }
-  if (t === "Swim") return Math.round((s/60)/(km*10)*100)/100 + " min/100m";
+  if (t === "Swim" || t === "OpenWaterSwim"){
+    const p100 = s / (km*10);
+    const m = Math.floor(p100/60), sg = Math.round(p100%60);
+    return m + ":" + String(sg).padStart(2,"0") + "/100m";
+  }
   const v = km / (s/3600);
   if (v < 1) return "";
   return (Math.round(v*10)/10).toString().replace(".", ",") + " km/h";
@@ -638,6 +695,56 @@ async function loadRuns(){
   }catch(e){ return false; }
 }
 
+function fmtSerie(s){
+  if (!s) return "—";
+  const hh = Math.floor(s/3600), mm = Math.floor((s%3600)/60), ss = Math.round(s%60);
+  if (hh) return hh + ":" + String(mm).padStart(2,"0") + ":" + String(ss).padStart(2,"0");
+  return mm + ":" + String(ss).padStart(2,"0");
+}
+function tablaSeries(a){
+  const lp = a.lp;
+  if (!lp || !lp.length) return "";
+  const dep = deporteDe(a.t);
+  let cols, cabe, fila;
+
+  if (dep === "correr"){
+    cols = "1fr 62px 62px 68px";
+    cabe = ["serie","dist","tiempo","ritmo"];
+    fila = s => [s.km ? (Math.round(s.km*100)/100).toString().replace(".", ",") + " km" : "—",
+                 fmtSerie(s.s),
+                 s.km && s.s ? fmtRitmo("Run", s.km, s.s) : "—"];
+  } else if (dep === "bici"){
+    cols = "1fr 62px 58px 58px";
+    cabe = ["serie","tiempo","np","ppm"];
+    fila = s => [fmtSerie(s.s), s.w ? s.w + " W" : "—", s.hr ? s.hr : "—"];
+  } else if (dep === "nadar"){
+    cols = "1fr 62px 62px 76px";
+    cabe = ["serie","dist","tiempo","ritmo"];
+    fila = s => [s.km ? Math.round(s.km*1000) + " m" : "—",
+                 fmtSerie(s.s),
+                 s.km && s.s ? fmtRitmo("Swim", s.km, s.s) : "—"];
+  } else {
+    cols = "1fr 80px";
+    cabe = ["serie","tiempo"];
+    fila = s => [fmtSerie(s.s)];
+  }
+
+  let h = '<button class="lapbtn">▸ ver series (' + lp.length + ')</button><div class="laps">';
+  h += '<div class="laph" style="grid-template-columns:' + cols + '">' +
+       cabe.map(c => '<span>' + c + '</span>').join("") + '</div>';
+  lp.forEach(s => {
+    const v = fila(s);
+    h += '<div class="lapr' + (s.tp === "RECO" ? " rec" : "") + '" style="grid-template-columns:' + cols + '">';
+    h += '<span class="et">' + esc(s.n) + '</span>';
+    v.forEach((val,i) => {
+      h += '<span class="d' + (i === v.length-1 ? " dest" : "") + '">' + esc(val) + '</span>';
+    });
+    h += '</div>';
+  });
+  h += '</div>';
+  return h;
+}
+
 /* ================= vista: actividades por día ================= */
 function renderActividades(){
   document.documentElement.style.setProperty("--accent", "#FFA84D");
@@ -695,8 +802,10 @@ function renderActividades(){
     if (a.s) stats.push(["tiempo", fmtDur(a.s), false]);
     const rit = fmtRitmo(a.t, a.km, a.s);
     if (rit) stats.push([A_PIE[a.t] ? "ritmo" : "velocidad", rit, true]);
+    if (a.np) stats.push(["np", Math.round(a.np) + " W", true]);
+    else if (a.pw) stats.push(["potencia", Math.round(a.pw) + " W", true]);
+    if (a.hr) stats.push(["pulso medio", Math.round(a.hr) + " ppm", false]);
     if (a.up) stats.push(["desnivel", Math.round(a.up) + " m+", false]);
-    if (a.hr) stats.push(["pulso", Math.round(a.hr) + " ppm", false]);
     if (a.l) stats.push(["carga", String(Math.round(a.l)), false]);
     if (stats.length){
       x += '<div class="astats">';
@@ -706,9 +815,78 @@ function renderActividades(){
       x += '</div>';
     }
     x += mapaSVG(a.g);
+    x += tablaSeries(a);
     c.innerHTML = x;
     const m = c.querySelector(".amap");
     if (m) m.onclick = () => abrirMapa(a);
+    const lb = c.querySelector(".lapbtn");
+    if (lb) lb.onclick = () => {
+      const t = c.querySelector(".laps");
+      const ab = t.classList.toggle("on");
+      lb.textContent = (ab ? "▾ ocultar series" : "▸ ver series (" + a.lp.length + ")");
+    };
+    cont.appendChild(c);
+  });
+}
+
+/* ================= vista: resumen por semanas ================= */
+function renderSemanas(){
+  document.documentElement.style.setProperty("--accent", "#FFA84D");
+  const cont = document.getElementById("content");
+  cont.className = "";
+  cont.innerHTML = "";
+
+  const acts = data.runs || [];
+  if (!acts.length){
+    cont.innerHTML = '<div class="empty">Aquí verás el resumen de cada semana<br>por deporte, horas y kilómetros.</div>';
+    return;
+  }
+
+  const semanas = {};
+  acts.forEach(a => {
+    if (!a.d) return;
+    const L = lunesDe(a.d);
+    if (!semanas[L]) semanas[L] = { seg:0, ses:0, dep:{} };
+    const S = semanas[L];
+    const k = deporteDe(a.t);
+    if (!S.dep[k]) S.dep[k] = { seg:0, km:0, ses:0 };
+    S.dep[k].seg += a.s || 0;
+    S.dep[k].km += a.km || 0;
+    S.dep[k].ses += 1;
+    S.seg += a.s || 0;
+    S.ses += 1;
+  });
+
+  const lunesHoy = lunesDe(TODAY);
+  Object.keys(semanas).sort().reverse().slice(0, 26).forEach(L => {
+    const S = semanas[L];
+    const p = L.split("-");
+    const ini = new Date(parseInt(p[0],10), parseInt(p[1],10)-1, parseInt(p[2],10));
+    const fin = new Date(ini); fin.setDate(fin.getDate() + 6);
+    const viva = L === lunesHoy;
+
+    const c = document.createElement("div");
+    c.className = "sem" + (viva ? " viva" : "");
+    let x = '<div class="semh"><span class="r">' + (viva ? "Esta semana" : fmtDate(L) + " – " + fmtDate(isoLocal(fin))) + '</span>';
+    if (viva) x += '<span class="f">' + fmtDate(L) + " – " + fmtDate(isoLocal(fin)) + '</span>';
+    x += '</div>';
+
+    DEPORTES.forEach(d => {
+      const v = S.dep[d.k];
+      if (!v) return;
+      const partes = [sumaDur(v.seg)];
+      if (d.km && v.km) partes.push(Math.round(v.km * 10) / 10 + " km");
+      x += '<div class="dep"><span class="i">' + d.i + '</span><span class="nm">' + d.n +
+           ' <span style="color:var(--faint)">· ' + v.ses + '</span></span>' +
+           '<span class="v"><b>' + partes[0] + '</b>' + (partes[1] ? " · " + partes[1].replace(".", ",") : "") + '</span></div>';
+    });
+    const o = S.dep["otros"];
+    if (o) x += '<div class="dep"><span class="i">•</span><span class="nm">Otros <span style="color:var(--faint)">· ' +
+      o.ses + '</span></span><span class="v"><b>' + sumaDur(o.seg) + '</b></span></div>';
+
+    x += '<div class="semtot"><div><div class="k">Total horas</div><div class="v">' + sumaDur(S.seg) + '</div></div>' +
+         '<div><div class="k">Sesiones</div><div class="v">' + S.ses + '</div></div></div>';
+    c.innerHTML = x;
     cont.appendChild(c);
   });
 }
@@ -717,7 +895,7 @@ function renderActividades(){
 function renderTabs(){
   const wrap = document.getElementById("tabs");
   wrap.innerHTML = "";
-  [["act","Actividades"],["fuerza","Fuerza"]].forEach(t => {
+  [["act","Actividades"],["sem","Semanas"],["fuerza","Fuerza"]].forEach(t => {
     const b = document.createElement("button");
     b.className = section === t[0] ? "on" : "";
     b.textContent = t[1];
@@ -1011,7 +1189,7 @@ function render(){
     daybar.style.display = "none";
     mob.style.display = "none";
     foot.style.display = "none";
-    renderActividades();
+    if (section === "sem") renderSemanas(); else renderActividades();
     return;
   }
   renderPlates();
