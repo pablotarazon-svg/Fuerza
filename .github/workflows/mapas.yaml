@@ -28,7 +28,7 @@ jobs:
               sys.exit("Faltan los secretos INTERVALS_ATHLETE_ID / INTERVALS_API_KEY")
           if not aid.startswith("i"):
               aid = "i" + aid
-          print("VERSION 4 · Atleta:", aid, "| clave de", len(key), "caracteres")
+          print("VERSION 6 · Atleta:", aid, "| clave de", len(key), "caracteres")
 
           auth = base64.b64encode(("API_KEY:" + key).encode()).decode()
           CAB = {"Authorization": "Basic " + auth,
@@ -121,21 +121,18 @@ jobs:
                   return None
               trozos = []
               if isinstance(d, dict):
-                  for clave in ("icu_intervals", "laps", "intervals"):
-                      v = d.get(clave)
-                      if isinstance(v, list) and v:
-                          trozos = v
-                          if avisar:
-                              print("DIAG: series en el campo", clave, "·", len(v))
-                          break
-                  if avisar and not trozos:
-                      print("DIAG: claves recibidas:", list(d.keys())[:15])
+                  v = d.get("laps")          # SOLO los laps marcados en el reloj/ciclocomputador
+                  if isinstance(v, list):
+                      trozos = v
+                  if avisar:
+                      print("DIAG: laps del dispositivo:", len(d.get("laps") or []),
+                            "· series automaticas (ignoradas):", len(d.get("icu_intervals") or []))
               elif isinstance(d, list):
                   trozos = d
               if not trozos:
                   return None
               if avisar and isinstance(trozos[0], dict):
-                  print("DIAG: campos de una serie:", sorted(trozos[0].keys())[:25])
+                  print("DIAG: campos de un lap:", sorted(trozos[0].keys())[:25])
 
               def n(v):
                   try:
@@ -162,9 +159,11 @@ jobs:
                       "w": int(np_) if np_ else None,
                       "hr": int(n(t.get("average_heartrate")) or 0) or None,
                   })
-                  if len(fuera) >= 40:
+                  if len(fuera) >= 60:
                       break
-              return fuera or None
+              if len(fuera) < 2:
+                  return None
+              return fuera
 
           def direcciones(ident):
               corto = str(ident)[1:] if str(ident).startswith("i") else str(ident)
@@ -208,12 +207,23 @@ jobs:
                   "up": num(a.get("total_elevation_gain")),
                   "hr": num(a.get("average_heartrate")),
                   "l": num(a.get("icu_training_load")),
-                  "np": num(a.get("icu_weighted_avg_watts")) or num(a.get("weighted_average_watts")),
+                  "np": (num(a.get("icu_weighted_avg_watts")) or num(a.get("weighted_average_watts"))
+                         or num(a.get("normalized_watts")) or num(a.get("icu_np"))),
                   "pw": num(a.get("icu_average_watts")) or num(a.get("average_watts")),
               })
 
           salida.sort(key=lambda x: x["dt"], reverse=True)
           salida = salida[:300]
+
+          bicis = [a for a in acts if (a.get("type") or "").endswith("Ride")]
+          if bicis:
+              campos = sorted(k for k in bicis[0].keys()
+                              if "watt" in k.lower() or "np" in k.lower() or "power" in k.lower())
+              print("DIAG bici:", bicis[0].get("name"))
+              for k in campos:
+                  print("   ", k, "=", bicis[0].get(k))
+          else:
+              print("DIAG: no hay actividades de bici en el periodo")
 
           conKm = [a for a in salida if a.get("km")]
           if conKm:
