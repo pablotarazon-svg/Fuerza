@@ -709,27 +709,27 @@ function tablaSeries(a){
 
   if (dep === "correr"){
     cols = "1fr 62px 62px 68px";
-    cabe = ["serie","dist","tiempo","ritmo"];
+    cabe = ["lap","dist","tiempo","ritmo"];
     fila = s => [s.km ? (Math.round(s.km*100)/100).toString().replace(".", ",") + " km" : "—",
                  fmtSerie(s.s),
                  s.km && s.s ? fmtRitmo("Run", s.km, s.s) : "—"];
   } else if (dep === "bici"){
     cols = "1fr 62px 58px 58px";
-    cabe = ["serie","tiempo","np","ppm"];
+    cabe = ["lap","tiempo","np","ppm"];
     fila = s => [fmtSerie(s.s), s.w ? s.w + " W" : "—", s.hr ? s.hr : "—"];
   } else if (dep === "nadar"){
     cols = "1fr 62px 62px 76px";
-    cabe = ["serie","dist","tiempo","ritmo"];
+    cabe = ["lap","dist","tiempo","ritmo"];
     fila = s => [s.km ? Math.round(s.km*1000) + " m" : "—",
                  fmtSerie(s.s),
                  s.km && s.s ? fmtRitmo("Swim", s.km, s.s) : "—"];
   } else {
     cols = "1fr 80px";
-    cabe = ["serie","tiempo"];
+    cabe = ["lap","tiempo"];
     fila = s => [fmtSerie(s.s)];
   }
 
-  let h = '<button class="lapbtn">▸ ver series (' + lp.length + ')</button><div class="laps">';
+  let h = '<button class="lapbtn">▸ ver laps (' + lp.length + ')</button><div class="laps">';
   h += '<div class="laph" style="grid-template-columns:' + cols + '">' +
        cabe.map(c => '<span>' + c + '</span>').join("") + '</div>';
   lp.forEach(s => {
@@ -850,7 +850,7 @@ function renderActividades(){
     if (lb) lb.onclick = () => {
       const t = c.querySelector(".laps");
       const ab = t.classList.toggle("on");
-      lb.textContent = (ab ? "▾ ocultar series" : "▸ ver series (" + a.lp.length + ")");
+      lb.textContent = (ab ? "▾ ocultar laps" : "▸ ver laps (" + a.lp.length + ")");
     };
     cont.appendChild(c);
   });
