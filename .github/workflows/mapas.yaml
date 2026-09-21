@@ -2,7 +2,7 @@ name: Actividades v2
 
 on:
   schedule:
-    - cron: "0 5,11,17 * * *"
+    - cron: "7 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -28,7 +28,7 @@ jobs:
               sys.exit("Faltan los secretos INTERVALS_ATHLETE_ID / INTERVALS_API_KEY")
           if not aid.startswith("i"):
               aid = "i" + aid
-          print("VERSION 6 · Atleta:", aid, "| clave de", len(key), "caracteres")
+          print("VERSION 8 · Atleta:", aid, "| clave de", len(key), "caracteres")
 
           auth = base64.b64encode(("API_KEY:" + key).encode()).decode()
           CAB = {"Authorization": "Basic " + auth,
@@ -204,6 +204,7 @@ jobs:
                   "n": a.get("name") or "",
                   "km": round(dist / 1000.0, 2) if dist else None,
                   "s": a.get("moving_time") or a.get("elapsed_time"),
+                  "st": a.get("elapsed_time") or None,
                   "up": num(a.get("total_elevation_gain")),
                   "hr": num(a.get("average_heartrate")),
                   "l": num(a.get("icu_training_load")),
@@ -263,6 +264,73 @@ jobs:
           print("Recorridos: nuevos", nuevos, "· total", sum(1 for a in salida if a.get("g")))
           print("Series: nuevas", nuevasLp, "· total", sum(1 for a in salida if a.get("lp")))
 
+          # ================= CALENDARIO PLANIFICADO (entrenador) =================
+          def paso_txt(p, sangria=""):
+              """Convierte un paso de workout_doc en una línea legible."""
+              lineas = []
+              if p.get("reps") and p.get("steps"):
+                  lineas.append(sangria + str(p["reps"]) + "x")
+                  for q in p["steps"]:
+                      lineas += paso_txt(q, sangria + "  ")
+                  return lineas
+              partes = []
+              dur = p.get("duration"); dist = p.get("distance")
+              if dur:
+                  partes.append((str(int(dur // 60)) + "m" + (str(int(dur % 60)) + "s" if dur % 60 else "")) if dur >= 60 else str(int(dur)) + "s")
+              elif dist:
+                  partes.append(str(round(dist / 1000, 2)).rstrip("0").rstrip(".") + "km" if dist >= 1000 else str(int(dist)) + "m")
+              for k in ("power", "hr", "pace"):
+                  t = p.get(k)
+                  if isinstance(t, dict):
+                      u = t.get("units") or ""
+                      if "start" in t and "end" in t:
+                          partes.append("%s-%s%s" % (t["start"], t["end"], (" " + u) if u else ""))
+                      elif "value" in t:
+                          partes.append("%s%s" % (t["value"], (" " + u) if u else ""))
+              if p.get("text"):
+                  partes.append(str(p["text"]))
+              if partes:
+                  lineas.append(sangria + "- " + " ".join(str(x) for x in partes))
+              return lineas
+
+          desdeP = hoy - datetime.timedelta(days=42)
+          hastaP = hoy + datetime.timedelta(days=120)
+          evs, codE = pedir("https://intervals.icu/api/v1/athlete/%s/events?oldest=%s&newest=%s"
+                            % (aid, desdeP.isoformat(), hastaP.isoformat()), avisar=True)
+          plan = []
+          for e in (evs or []):
+              cuando = e.get("start_date_local") or ""
+              if not cuando:
+                  continue
+              desc = (e.get("description") or "").strip()
+              if not desc and isinstance(e.get("workout_doc"), dict):
+                  pasos = e["workout_doc"].get("steps") or []
+                  desc = "\n".join(l for p in pasos if isinstance(p, dict) for l in paso_txt(p))
+              dist = num(e.get("icu_distance_target")) or num(e.get("distance"))
+              hora = cuando[11:16] if len(cuando) >= 16 and cuando[11:16] != "00:00" else ""
+              plan.append({
+                  "id": e.get("id"),
+                  "d": cuando[:10],
+                  "h": hora,
+                  "c": (e.get("category") or "WORKOUT").upper(),
+                  "t": e.get("type") or "",
+                  "n": e.get("name") or "",
+                  "desc": desc[:2500],
+                  "s": e.get("moving_time") or None,
+                  "km": round(dist / 1000.0, 2) if dist else None,
+              })
+          plan.sort(key=lambda x: (x["d"], x["h"] or "99"))
+          cats = {}
+          for p in plan:
+              cats[p["c"]] = cats.get(p["c"], 0) + 1
+          print("Calendario: HTTP", codE, "·", len(plan), "eventos ·", cats)
+          if evs:
+              print("DIAG: campos de un evento:", sorted(evs[0].keys())[:30])
+          with open("plan.json", "w", encoding="utf-8") as f:
+              json.dump({"updated": datetime.datetime.now(datetime.timezone.utc)
+                         .replace(microsecond=0, tzinfo=None).isoformat() + "Z",
+                         "events": plan}, f, ensure_ascii=False, separators=(",", ":"))
+
           datos = {"updated": datetime.datetime.now(datetime.timezone.utc)
                                 .replace(microsecond=0, tzinfo=None).isoformat() + "Z",
                    "activities": salida}
@@ -275,6 +343,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add runs.json
+          git add runs.json plan.json
           git diff --staged --quiet || git commit -m "Actualizar actividades"
           git push
