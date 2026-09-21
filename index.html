@@ -210,6 +210,14 @@
   .ovlsvg .fin{fill:#E2452E}
   .ovlnota{color:var(--faint); font-size:12.5px; text-align:center; padding:0 20px 14px; line-height:1.5}
   .amap svg{display:block; width:100%; height:auto}
+  .amap.real{padding:0; overflow:hidden; background:#2A2F36}
+  .amap.real svg{aspect-ratio:320/170}
+  .amap.real .ruta{stroke:#FF7A1A; stroke-width:3.4}
+  .amap.real .sombra{fill:none; stroke:rgba(20,20,20,.55); stroke-width:6.5; stroke-linecap:round; stroke-linejoin:round}
+  .amap.real .ini, .amap.real .fin{stroke:#fff; stroke-width:2}
+  .amap.real .lupa{background:rgba(21,23,26,.8); color:#C9CEDA}
+  .amap .attr{position:absolute; left:7px; bottom:5px; font-size:8.5px; color:#555; background:rgba(255,255,255,.7);
+    border-radius:4px; padding:1px 4px; font-family:-apple-system,sans-serif}
   .amap .ruta{fill:none; stroke:var(--fig-load); stroke-width:2.6; stroke-linecap:round; stroke-linejoin:round}
   .amap .ini{fill:#5FBF7A}
   .amap .fin{fill:#E2452E}
@@ -785,6 +793,69 @@ function nomDia(iso){
   const dias = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
   return dias[d.getDay()];
 }
+/* ---- mini mapa con fondo de mapa real (teselas OpenStreetMap / CARTO) ---- */
+const TESELA = (z, x, y) => "https://" + "abcd"[(x + y) % 4] + ".basemaps.cartocdn.com/rastertiles/voyager/" + z + "/" + x + "/" + y + "@2x.png";
+function merc(lat, lon, z){
+  const n = 256 * Math.pow(2, z);
+  const s = Math.sin(lat * Math.PI / 180);
+  return [ (lon + 180) / 360 * n, (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n ];
+}
+function mapaMini(g){
+  if (!g || g.length < 5) return "";
+  const W = 320, H = 170, pad = 22;
+  // zoom máximo con el que el recorrido cabe en el recuadro
+  let z = 17, P;
+  for (; z >= 3; z--){
+    P = g.map(p => merc(p[0], p[1], z));
+    const xs = P.map(p => p[0]), ys = P.map(p => p[1]);
+    if (Math.max.apply(null, xs) - Math.min.apply(null, xs) <= W - 2*pad &&
+        Math.max.apply(null, ys) - Math.min.apply(null, ys) <= H - 2*pad) break;
+  }
+  const xs = P.map(p => p[0]), ys = P.map(p => p[1]);
+  const cx = (Math.min.apply(null, xs) + Math.max.apply(null, xs)) / 2;
+  const cy = (Math.min.apply(null, ys) + Math.max.apply(null, ys)) / 2;
+  const ox = cx - W / 2, oy = cy - H / 2;
+  // teselas que cubren el recuadro (se cargan al entrar en pantalla)
+  let t = "";
+  const n = Math.pow(2, z);
+  for (let ty = Math.floor(oy / 256); ty <= Math.floor((oy + H) / 256); ty++){
+    if (ty < 0 || ty >= n) continue;
+    for (let tx = Math.floor(ox / 256); tx <= Math.floor((ox + W) / 256); tx++){
+      const txw = ((tx % n) + n) % n;
+      t += '<image data-href="' + TESELA(z, txw, ty) + '" x="' + (tx*256 - ox).toFixed(1) + '" y="' + (ty*256 - oy).toFixed(1) +
+           '" width="256.6" height="256.6" preserveAspectRatio="none"/>';
+    }
+  }
+  const pts = P.map(p => [(p[0] - ox).toFixed(1), (p[1] - oy).toFixed(1)]);
+  const d = "M" + pts.map(p => p[0] + " " + p[1]).join(" L");
+  const a = pts[0], b = pts[pts.length - 1];
+  return '<div class="amap real"><svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid slice" aria-hidden="true">' +
+    '<g class="teselas">' + t + '</g>' +
+    '<path class="sombra" d="' + d + '"/><path class="ruta" d="' + d + '"/>' +
+    '<circle class="ini" cx="' + a[0] + '" cy="' + a[1] + '" r="5"/>' +
+    '<circle class="fin" cx="' + b[0] + '" cy="' + b[1] + '" r="5"/></svg>' +
+    '<span class="attr">© OpenStreetMap · CARTO</span><span class="lupa">toca para ampliar</span></div>';
+}
+// cargar las teselas solo cuando el mapa se ve
+const vigiaMapas = ("IntersectionObserver" in window) ? new IntersectionObserver(ents => {
+  ents.forEach(en => {
+    if (!en.isIntersecting) return;
+    cargarTeselas(en.target);
+    vigiaMapas.unobserve(en.target);
+  });
+}, { rootMargin:"300px 0px" }) : null;
+function cargarTeselas(el){
+  el.querySelectorAll("image[data-href]").forEach(im => {
+    const u = im.getAttribute("data-href");
+    im.setAttribute("href", u);
+    im.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", u);
+    im.removeAttribute("data-href");
+  });
+}
+function vigilarMapas(raiz){
+  raiz.querySelectorAll(".amap.real").forEach(el => { if (vigiaMapas) vigiaMapas.observe(el); else cargarTeselas(el); });
+}
+
 function mapaSVG(g, grande){
   if (!g || g.length < 5) return "";
   const latM = g.reduce((a,p) => a + p[0], 0) / g.length;
@@ -1053,7 +1124,7 @@ function renderActividades(){
       x += '</div>';
     }
     x += bloqueApp(a.app || enl.porAct[a.id]);
-    x += mapaSVG(a.g);
+    x += mapaMini(a.g);
     x += tablaSeries(a);
     c.innerHTML = x;
     const ab = c.querySelector(".apbtn");
@@ -1063,7 +1134,7 @@ function renderActividades(){
       ab.textContent = on ? "▾ ocultar ejercicios" : "▸ ver ejercicios";
     };
     const m = c.querySelector(".amap");
-    if (m) m.onclick = () => abrirMapa(a);
+    if (m){ m.onclick = () => abrirMapa(a); vigilarMapas(c); }
     const lb = c.querySelector(".lapbtn");
     if (lb) lb.onclick = () => {
       const t = c.querySelector(".laps");
