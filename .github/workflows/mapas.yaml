@@ -28,7 +28,7 @@ jobs:
               sys.exit("Faltan los secretos INTERVALS_ATHLETE_ID / INTERVALS_API_KEY")
           if not aid.startswith("i"):
               aid = "i" + aid
-          print("VERSION 8 · Atleta:", aid, "| clave de", len(key), "caracteres")
+          print("VERSION 9 · Atleta:", aid, "| clave de", len(key), "caracteres")
 
           auth = base64.b64encode(("API_KEY:" + key).encode()).decode()
           CAB = {"Authorization": "Basic " + auth,
@@ -52,7 +52,7 @@ jobs:
                   return None, 0
 
           hoy = datetime.date.today()
-          desde = hoy - datetime.timedelta(days=200)
+          desde = hoy - datetime.timedelta(days=370)
           acts, cod = pedir("https://intervals.icu/api/v1/athlete/%s/activities?oldest=%s&newest=%s"
                             % (aid, desde.isoformat(), hoy.isoformat()), avisar=True)
           if acts is None:
@@ -208,14 +208,18 @@ jobs:
                   "up": num(a.get("total_elevation_gain")),
                   "hr": num(a.get("average_heartrate")),
                   "l": num(a.get("icu_training_load")),
+                  "zh": [int(x) for x in (a.get("icu_hr_zone_times") or a.get("hr_zone_times") or []) if isinstance(x, (int, float))] or None,
                   "np": (num(a.get("icu_weighted_avg_watts")) or num(a.get("weighted_average_watts"))
                          or num(a.get("normalized_watts")) or num(a.get("icu_np"))),
                   "pw": num(a.get("icu_average_watts")) or num(a.get("average_watts")),
               })
 
           salida.sort(key=lambda x: x["dt"], reverse=True)
-          salida = salida[:300]
+          salida = salida[:600]
 
+          conZonas = [a for a in acts if any("zone" in k.lower() for k in a.keys())]
+          if conZonas:
+              print("DIAG zonas:", sorted(k for k in conZonas[0].keys() if "zone" in k.lower()))
           bicis = [a for a in acts if (a.get("type") or "").endswith("Ride")]
           if bicis:
               campos = sorted(k for k in bicis[0].keys()
@@ -263,6 +267,28 @@ jobs:
 
           print("Recorridos: nuevos", nuevos, "· total", sum(1 for a in salida if a.get("g")))
           print("Series: nuevas", nuevasLp, "· total", sum(1 for a in salida if a.get("lp")))
+
+          # ================= FORMA / FATIGA (bienestar diario) =================
+          wel, codW = pedir("https://intervals.icu/api/v1/athlete/%s/wellness?oldest=%s&newest=%s"
+                            % (aid, (hoy - datetime.timedelta(days=370)).isoformat(), hoy.isoformat()), avisar=True)
+          dias = []
+          for w in (wel or []):
+              fecha = str(w.get("id") or "")[:10]
+              if len(fecha) != 10:
+                  continue
+              dias.append({"d": fecha,
+                           "ctl": num(w.get("ctl") or w.get("icu_ctl")),
+                           "atl": num(w.get("atl") or w.get("icu_atl")),
+                           "rr": num(w.get("rampRate")),
+                           "hrv": num(w.get("hrv")),
+                           "rhr": num(w.get("restingHR")),
+                           "sue": num(w.get("sleepSecs"))})
+          dias.sort(key=lambda x: x["d"])
+          print("Forma: HTTP", codW, "·", len(dias), "dias", "· ultimo:", dias[-1] if dias else "-")
+          with open("forma.json", "w", encoding="utf-8") as f:
+              json.dump({"updated": datetime.datetime.now(datetime.timezone.utc)
+                         .replace(microsecond=0, tzinfo=None).isoformat() + "Z",
+                         "days": dias}, f, ensure_ascii=False, separators=(",", ":"))
 
           # ================= CALENDARIO PLANIFICADO (entrenador) =================
           def paso_txt(p, sangria=""):
@@ -343,6 +369,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add runs.json plan.json
+          git add runs.json plan.json forma.json
           git diff --staged --quiet || git commit -m "Actualizar actividades"
           git push
