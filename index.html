@@ -165,6 +165,21 @@
   .semtot .k{font-family:var(--mono); font-size:9.5px; color:var(--faint); letter-spacing:.08em; text-transform:uppercase}
   .semtot .v{font-family:var(--mono); font-size:16px; color:var(--chalk); margin-top:2px}
 
+  .nutri{margin-top:10px; background:var(--surface2); border:1px solid var(--line); border-radius:12px; padding:10px 11px}
+  .nuh{display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12.5px; color:var(--muted); margin-bottom:8px}
+  .bidbt{border:1px solid var(--line); background:var(--surface); color:var(--faint); border-radius:999px;
+    padding:3px 9px; font-size:11px; font-family:var(--mono); cursor:pointer}
+  .nur{display:flex; gap:7px; align-items:stretch}
+  .nur .fld{flex:1; background:var(--surface); min-width:0}
+  .nur .fld input{font-size:16px; padding:9px 0}
+  .nuok{flex:none; border:none; background:var(--chalk); color:#101214; border-radius:10px; padding:0 14px;
+    font-size:13px; font-weight:600; cursor:pointer}
+  .nuok.ok{background:#5FBF7A}
+  .nut{margin-top:8px; font-family:var(--mono); font-size:13px; color:var(--muted)}
+  .nut b{color:var(--chalk)}
+  .nut .gh{color:var(--fig-load)}
+  .nut .vacio{font-family:-apple-system,sans-serif; font-size:12.5px; color:var(--faint)}
+  .apav{margin-top:6px; font-size:12px; color:var(--faint); line-height:1.45}
   .appses{margin-top:10px; background:#1F2A22; border:1px solid #2E4A36; border-radius:11px; padding:9px 11px}
   .apph{display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12.5px; color:#8FD3A4}
   .apph .n{font-family:var(--mono); font-size:11px; color:var(--faint); white-space:nowrap}
@@ -686,7 +701,7 @@ const store = {
 };
 
 /* ================= estado ================= */
-let data = { hist:{}, cur:{}, custom:{}, runs:[], runsUp:null, planEv:[], planUp:null, notas:{}, forma:[], formaUp:null };
+let data = { hist:{}, cur:{}, custom:{}, runs:[], runsUp:null, planEv:[], planUp:null, notas:{}, forma:[], formaUp:null, nutri:{}, bidon:0.75 };
 let currentDay = "d1";
 let currentView = "day";
 let section = "act";
@@ -745,7 +760,7 @@ function ensureCur(dayId){
   if (!data.cur[dayId]) data.cur[dayId] = { date:TODAY, ex:{}, mob:false };
   return data.cur[dayId];
 }
-function empezada(dayId){ const c = ensureCur(dayId); if (!c.ini) c.ini = Date.now(); }
+
 function ensureEx(dayId, ex){
   const s = ensureCur(dayId);
   if (!s.ex[ex.id]){
@@ -850,6 +865,11 @@ const TIPOS = { Run:"Carrera", TrailRun:"Trail", VirtualRun:"Cinta", Treadmill:"
   Rowing:"Remo", Yoga:"Yoga", Elliptical:"Elíptica", AlpineSki:"Esquí", Other:"Otro" };
 function tipoEs(t){ return TIPOS[t] || t || ""; }
 function fmtKm(km){ if (!km) return ""; return (Math.round(km*10)/10).toString().replace(".", ",") + " km"; }
+function fmtDurS(s){
+  if (!s && s !== 0) return "";
+  const t = Math.round(s), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sg = t % 60;
+  return (h ? h + "h" + String(m).padStart(2,"0") : m) + ":" + String(sg).padStart(2,"0");
+}
 function fmtDur(s){
   if (!s) return "";
   const t = Math.round(s / 60), h = Math.floor(t / 60), m = t % 60;
@@ -881,6 +901,56 @@ function nomDia(iso){
   const dias = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
   return dias[d.getDay()];
 }
+/* ---- nutrición por actividad ---- */
+const BIDONES = [0.5, 0.6, 0.75, 1];
+function litroBidon(){ return data.bidon || 0.75; }
+function nutriDe(id){ return (data.nutri || {})[id] || {}; }
+function bloqueNutri(a){
+  const dep = deporteDe(a.t);
+  if (dep === "fuerza" || dep === "nadar" || a.app) return "";
+  const n = nutriDe(a.id);
+  const hc = n.hc != null ? n.hc : "", bd = n.bid != null ? n.bid : "";
+  let x = '<div class="nutri" data-id="' + esc(a.id) + '">';
+  x += '<div class="nuh"><span>🥤 Avituallamiento</span><button class="bidbt">' + String(litroBidon()).replace(".", ",") + ' L/bidón</button></div>';
+  x += '<div class="nur">';
+  x += '<div class="fld"><input type="text" inputmode="numeric" data-f="hc" placeholder="hidratos" value="' + esc(hc) + '"><span class="unit">g</span></div>';
+  x += '<div class="fld"><input type="text" inputmode="decimal" data-f="bid" placeholder="bidones" value="' + esc(bd) + '"><span class="unit">ud</span></div>';
+  x += '<button class="nuok">Guardar</button></div>';
+  x += '<div class="nut"></div></div>';
+  return x;
+}
+function pintarNutri(el, a){
+  const n = nutriDe(a.id), t = el.querySelector(".nut");
+  const hc = num(n.hc), bd = num(n.bid);
+  if (hc == null && bd == null){ t.innerHTML = '<span class="vacio">Apunta lo que has tomado y tócale a guardar.</span>'; return; }
+  const l = bd != null ? bd * litroBidon() : null;
+  const gh = (hc != null && a.s) ? Math.round(hc / (a.s / 3600)) : null;
+  t.innerHTML = 'Total: ' + (hc != null ? '<b>' + f1(hc) + ' g</b>' : '') +
+    (hc != null && l != null ? ' · ' : '') + (l != null ? '<b>' + f1(l) + ' L</b>' : '') +
+    (gh ? ' <span class="gh">' + gh + ' g/h</span>' : '');
+}
+function engancharNutri(c, a){
+  const el = c.querySelector(".nutri");
+  if (!el) return;
+  pintarNutri(el, a);
+  el.querySelector(".bidbt").onclick = () => {
+    const i = BIDONES.indexOf(litroBidon());
+    data.bidon = BIDONES[(i + 1) % BIDONES.length];
+    scheduleSave(); renderActividades();
+  };
+  el.querySelector(".nuok").onclick = () => {
+    if (!data.nutri) data.nutri = {};
+    const v = k => { const s = el.querySelector('input[data-f="' + k + '"]').value.trim(); return s === "" ? null : num(s); };
+    const hc = v("hc"), bd = v("bid");
+    if (hc == null && bd == null) delete data.nutri[a.id];
+    else data.nutri[a.id] = { hc:hc, bid:bd };
+    scheduleSave(); pintarNutri(el, a);
+    const b = el.querySelector(".nuok");
+    b.textContent = "✓ Guardado"; b.classList.add("ok");
+    setTimeout(() => { b.textContent = "Guardar"; b.classList.remove("ok"); }, 1600);
+  };
+}
+
 /* ---- mini mapa con fondo de mapa real (teselas OpenStreetMap / CARTO) ---- */
 const TESELA = (z, x, y) => "https://" + "abcd"[(x + y) % 4] + ".basemaps.cartocdn.com/rastertiles/voyager/" + z + "/" + x + "/" + y + "@2x.png";
 function merc(lat, lon, z){
@@ -1140,7 +1210,7 @@ function renderActividades(){
       const hd = document.createElement("div");
       hd.className = "diahead";
       hd.innerHTML = '<span class="f">' + (a.d === TODAY ? "Hoy" : nomDia(a.d) + " " + fmtDate(a.d)) + '</span>' +
-        '<span class="tot">' + [km ? fmtKm(km) : "", fmtDur(seg)].filter(Boolean).join(" · ") + '</span>';
+        '<span class="tot">' + [km ? fmtKm(km) : "", seg ? fmtDurS(seg) : ""].filter(Boolean).join(" · ") + '</span>';
       cont.appendChild(hd);
     }
 
@@ -1154,7 +1224,7 @@ function renderActividades(){
     const stats = [];
     const dep = deporteDe(tEf);
     const km = a.km ? ["distancia", fmtKm(a.km), true] : null;
-    const tiempo = a.s ? ["tiempo", fmtDur(a.s), false] : null;
+    const tiempo = a.s ? ["tiempo", fmtDurS(a.s), false] : null;
     const pulso = a.hr ? ["pulso medio", Math.round(a.hr) + " ppm", false] : null;
     const subida = a.up ? ["desnivel", Math.round(a.up) + " m+", false] : null;
     const ritmo = fmtRitmo(a.t, a.km, a.s);
@@ -1171,7 +1241,7 @@ function renderActividades(){
       if (tiempo) stats.push(tiempo);
       if (a.up) stats.push(["desnivel +", Math.round(a.up) + " m", false]);
       if (pulso) stats.push(pulso);
-      if (a.st) stats.push(["tiempo total", fmtDur(a.st), false]);
+      if (a.st) stats.push(["tiempo total", fmtDurS(a.st), false]);
     } else if (dep === "correr"){
       if (km) stats.push(km);
       if (tiempo) stats.push(tiempo);
@@ -1211,8 +1281,9 @@ function renderActividades(){
       });
       x += '</div>';
     }
-    x += bloqueApp(a.app || enl.porAct[a.id]);
+    x += bloqueApp(a.app || enl.porAct[a.id], !!a.sinAct);
     x += mapaMini(a.g);
+    x += bloqueNutri(a);
     x += tablaSeries(a);
     c.innerHTML = x;
     const ab = c.querySelector(".apbtn");
@@ -1223,6 +1294,7 @@ function renderActividades(){
     };
     const m = c.querySelector(".amap");
     if (m){ m.onclick = () => abrirMapa(a); vigilarMapas(c); }
+    engancharNutri(c, a);
     const lb = c.querySelector(".lapbtn");
     if (lb) lb.onclick = () => {
       const t = c.querySelector(".laps");
@@ -1341,25 +1413,13 @@ function sesionesApp(){
 function esFuerzaIntervals(t){ return deporteDe(t) === "fuerza" || t === "Other" || !t; }
 function enlazarFuerza(){
   const ses = sesionesApp();
-  const cand = (data.runs || []).filter(a => esFuerzaIntervals(a.t));
-  // todas las parejas posibles del mismo día, ordenadas por cercanía horaria
-  const parejas = [];
-  ses.forEach(s => cand.forEach(a => {
-    if (a.d !== s.d) return;
-    let dist = 0;
-    if (s.fin){
-      const fa = new Date(a.dt).getTime() + (a.s || 0) * 1000;
-      dist = isFinite(fa) ? Math.abs(fa - s.fin) : 1e12;
-    }
-    parejas.push({ s:s, a:a, dist:dist });
-  }));
-  parejas.sort((x,y) => x.dist - y.dist);
-  const porAct = {}, sUsadas = new Set();
-  parejas.forEach(p => {
-    if (porAct[p.a.id] || sUsadas.has(p.s.key)) return;
-    porAct[p.a.id] = p.s; sUsadas.add(p.s.key);
+  const porFecha = {}, porAct = {}, sueltas = [];
+  ses.forEach(s => { (porFecha[s.d] = porFecha[s.d] || []).push(s); });
+  Object.keys(porFecha).forEach(d => {
+    const cand = (data.runs || []).filter(a => a.d === d && esFuerzaIntervals(a.t))
+      .sort((x, y) => (x.dt || "") < (y.dt || "") ? -1 : 1);
+    porFecha[d].forEach((s, i) => { if (cand[i]) porAct[cand[i].id] = s; else sueltas.push(s); });
   });
-  const sueltas = ses.filter(s => !sUsadas.has(s.key));
   return { porAct:porAct, sueltas:sueltas };
 }
 function horaDe(ms){
@@ -1372,14 +1432,16 @@ function actividadesTodas(){
   const extra = sueltas.map(s => ({
     id:"app:" + s.key, d:s.d, dt: s.fin ? s.d + "T" + horaDe(s.fin) + ":00" : s.d,
     t:"WeightTraining", n:"Fuerza · " + (s.day.dia || "") + (s.day.scheme ? " (" + s.day.scheme + ")" : ""),
-    s:s.dur || null, app:s
+    s:null, app:s, sinAct:true
   }));
   return (data.runs || []).concat(extra);
 }
-function bloqueApp(s){
+function bloqueApp(s, sinAct){
   if (!s) return "";
+  s = Object.assign({}, s, { sinAct: !!sinAct });
   let x = '<div class="appses"><div class="apph"><span>💪 Sesión de la app · ' + esc(s.day.dia || "") +
           (s.day.scheme ? " · " + esc(s.day.scheme) : "") + '</span><span class="n">' + s.items.length + ' ejercicios</span></div>';
+  if (s.sinAct) x += '<div class="apav">Sube esta sesión a Intervals y aquí aparecerá con su tiempo real.</div>';
   x += '<button class="apbtn">▸ ver ejercicios</button><div class="apl">';
   s.items.forEach(it => {
     x += '<div class="apr"><span class="an">' + esc(it.n) + '</span><span class="av">' + esc(it.v) + '</span></div>';
@@ -1970,7 +2032,6 @@ function finalizar(day){
   finArmed = false; clearTimeout(finTimer);
   s.date = TODAY;
   s.fin = Date.now();
-  if (s.ini) s.dur = Math.max(60, Math.min(Math.round((s.fin - s.ini) / 1000), 4 * 3600));
   if (!data.hist[day.id]) data.hist[day.id] = [];
   data.hist[day.id].push(s);
   data.cur[day.id] = null;
@@ -2005,7 +2066,7 @@ function renderDay(){
   const mobBox = document.getElementById("mobBox");
   mobChip.classList.toggle("done", !!cur.mob);
   mobBox.textContent = cur.mob ? "✓" : "";
-  mobChip.onclick = () => { empezada(currentDay); cur.mob = !cur.mob; scheduleSave(); renderDay(); };
+  mobChip.onclick = () => { cur.mob = !cur.mob; scheduleSave(); renderDay(); };
 
   const cont = document.getElementById("content");
   cont.innerHTML = "";
@@ -2073,7 +2134,7 @@ function renderDay(){
       h += '</div>';
       card.innerHTML = h;
 
-      card.querySelector(".ex-check").onclick = () => { empezada(currentDay); st.done = !st.done; scheduleSave(); renderDay(); };
+      card.querySelector(".ex-check").onclick = () => { st.done = !st.done; scheduleSave(); renderDay(); };
       card.querySelector(".hbtn").onclick = () => {
         if (openHists.has(ex.id)) openHists.delete(ex.id); else openHists.add(ex.id);
         renderDay();
@@ -2087,7 +2148,6 @@ function renderDay(){
       if (del) del.onclick = () => { st.sets.pop(); scheduleSave(); renderDay(); };
       card.querySelectorAll("input").forEach(inp => {
         inp.oninput = () => {
-          empezada(currentDay);
           const i = parseInt(inp.closest(".setrow").dataset.i, 10);
           st.sets[i][inp.dataset.f] = inp.value.trim();
           scheduleSave(); updateProgress();
@@ -2128,14 +2188,14 @@ function cajaCopia(cont){
   const c = document.createElement("div");
   c.className = "copia";
   c.innerHTML = '<h3>Copia de seguridad</h3>' +
-    '<p>Guarda tus pesos, sesiones y notas antes de borrar o reinstalar la app. Copia, pégalo en Notas, y luego usa «Pegar copia» para recuperarlo.</p>' +
+    '<p>Guarda tus pesos, sesiones, notas y avituallamiento antes de borrar o reinstalar la app. Copia, pégalo en Notas, y luego usa «Pegar copia» para recuperarlo.</p>' +
     '<div class="bt"><button data-a="copiar">📋 Copiar mis datos</button><button data-a="pegar">📥 Pegar copia</button></div>' +
     '<div class="ok"></div>';
   const aviso = c.querySelector(".ok");
   const decir = t => { aviso.textContent = t; aviso.style.display = "block"; };
 
   c.querySelector('[data-a="copiar"]').onclick = async () => {
-    const txt = JSON.stringify({ app:"entreno", v:2, hist:data.hist, cur:data.cur, custom:data.custom, notas:data.notas || {} });
+    const txt = JSON.stringify({ app:"entreno", v:3, hist:data.hist, cur:data.cur, custom:data.custom, notas:data.notas || {}, nutri:data.nutri || {}, bidon:data.bidon || 0.75 });
     let ok = false;
     try{ await navigator.clipboard.writeText(txt); ok = true; }catch(e){}
     if (ok){ decir("✓ Copiado. Pégalo en una nota para tenerlo a salvo."); return; }
@@ -2163,6 +2223,8 @@ function cajaCopia(cont){
     if (!confirm("Se sustituirán tus sesiones de fuerza y tus notas por las de la copia. ¿Seguir?")) return;
     data.hist = o.hist || {}; data.cur = o.cur || {}; data.custom = o.custom || {};
     if (o.notas) data.notas = o.notas;
+    if (o.nutri) data.nutri = o.nutri;
+    if (o.bidon) data.bidon = o.bidon;
     doSave();
     render();
   };
@@ -2312,7 +2374,8 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") cerrarMapa()
     data = { hist:loaded.hist || {}, cur:loaded.cur || {}, custom:loaded.custom || {},
              runs:loaded.runs || [], runsUp:loaded.runsUp || null,
              planEv:loaded.planEv || [], planUp:loaded.planUp || null, notas:loaded.notas || {},
-             forma:loaded.forma || [], formaUp:loaded.formaUp || null };
+             forma:loaded.forma || [], formaUp:loaded.formaUp || null,
+             nutri:loaded.nutri || {}, bidon:loaded.bidon || 0.75 };
   }
   calRef = TODAY; calSel = TODAY;
   render();
