@@ -18,6 +18,12 @@ jobs:
         env:
           ICU_ID: ${{ secrets.INTERVALS_ATHLETE_ID }}
           ICU_KEY: ${{ secrets.INTERVALS_API_KEY }}
+          WA_PHONE: ${{ secrets.WA_PHONE }}
+          WA_APIKEY: ${{ secrets.WA_APIKEY }}
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_SERVER: ${{ secrets.NTFY_SERVER }}
         run: |
           python3 - <<'PY'
           import base64, datetime, json, os, re, sys, time, urllib.error, urllib.request
@@ -28,7 +34,7 @@ jobs:
               sys.exit("Faltan los secretos INTERVALS_ATHLETE_ID / INTERVALS_API_KEY")
           if not aid.startswith("i"):
               aid = "i" + aid
-          print("VERSION 9 · Atleta:", aid, "| clave de", len(key), "caracteres")
+          print("VERSION 12 · Atleta:", aid, "| clave de", len(key), "caracteres")
 
           auth = base64.b64encode(("API_KEY:" + key).encode()).decode()
           CAB = {"Authorization": "Basic " + auth,
@@ -156,8 +162,8 @@ jobs:
                       "tp": (t.get("type") or "").upper()[:4],
                       "s": int(seg),
                       "km": round(dist / 1000.0, 3) if dist else None,
-                      "w": int(np_) if np_ else None,
-                      "hr": int(n(t.get("average_heartrate")) or 0) or None,
+                      "w": np_ if np_ else None,
+                      "hr": n(t.get("average_heartrate")) or None,
                   })
                   if len(fuera) >= 60:
                       break
@@ -202,7 +208,7 @@ jobs:
                   "dt": cuando,
                   "t": a.get("type") or "Other",
                   "n": a.get("name") or "",
-                  "km": round(dist / 1000.0, 2) if dist else None,
+                  "km": round(dist / 1000.0, 3) if dist else None,
                   "s": a.get("moving_time") or a.get("elapsed_time"),
                   "st": a.get("elapsed_time") or None,
                   "up": num(a.get("total_elevation_gain")),
@@ -343,7 +349,7 @@ jobs:
                   "n": e.get("name") or "",
                   "desc": desc[:2500],
                   "s": e.get("moving_time") or None,
-                  "km": round(dist / 1000.0, 2) if dist else None,
+                  "km": round(dist / 1000.0, 3) if dist else None,
               })
           plan.sort(key=lambda x: (x["d"], x["h"] or "99"))
           cats = {}
@@ -357,6 +363,229 @@ jobs:
                          .replace(microsecond=0, tzinfo=None).isoformat() + "Z",
                          "events": plan}, f, ensure_ascii=False, separators=(",", ":"))
 
+          # ================= ANALISIS: PLANIFICADO FRENTE A LO HECHO =================
+          import urllib.parse
+          crudo = {str(a.get("id")): a for a in acts}
+          ftpAt = 0
+          perfil, _c = pedir("https://intervals.icu/api/v1/athlete/%s/profile" % aid)
+          if isinstance(perfil, dict):
+              at = perfil.get("athlete") or perfil
+              ftpAt = num(at.get("icu_ftp")) or num(at.get("ftp")) or 0
+          print("FTP del atleta:", ftpAt or "sin dato")
+
+          FAM = {"Run":"correr", "TrailRun":"correr", "VirtualRun":"correr", "Treadmill":"correr",
+                 "Hike":"correr", "Walk":"correr", "Ride":"bici", "VirtualRide":"bici",
+                 "GravelRide":"bici", "MountainBikeRide":"bici", "EBikeRide":"bici",
+                 "EMountainBikeRide":"bici", "MountainBikeRide ":"bici",
+                 "Swim":"nadar", "OpenWaterSwim":"nadar",
+                 "WeightTraining":"fuerza", "Workout":"fuerza", "Other":"fuerza"}
+          def fam(t): return FAM.get(t or "", (t or "").lower())
+
+          def hhmm(s):
+              if not s: return "-"
+              s = int(round(s)); hh, mm, ss = s // 3600, (s % 3600) // 60, s % 60
+              return ("%dh%02d:%02d" % (hh, mm, ss)) if hh else ("%d:%02d" % (mm, ss))
+
+          def dec(v, n=2):
+              if v is None: return "-"
+              t = ("%." + str(n) + "f") % float(v)
+              if "." in t: t = t.rstrip("0").rstrip(".")
+              return t.replace(".", ",")
+
+          def pasos_plan(ev):
+              """Pasos del entreno planificado con su objetivo de vatios."""
+              doc = (crudo_ev.get(str(ev.get("id"))) or {}).get("workout_doc")
+              if not isinstance(doc, dict): return []
+              fuera = []
+              def mete(p):
+                  if not isinstance(p, dict): return
+                  if p.get("reps") and p.get("steps"):
+                      for _ in range(int(p["reps"])):
+                          for q in p["steps"]: mete(q)
+                      return
+                  w = None
+                  pw = p.get("power")
+                  if isinstance(pw, dict):
+                      u = (pw.get("units") or "").lower()
+                      v = pw.get("value")
+                      if v is None and pw.get("start") is not None and pw.get("end") is not None:
+                          v = (float(pw["start"]) + float(pw["end"])) / 2.0
+                      if v is not None:
+                          w = float(v) * ftpAt / 100.0 if ("%" in u and ftpAt) else float(v)
+                  fuera.append({"s": p.get("duration"), "w": w})
+              for p in (doc.get("steps") or []): mete(p)
+              return fuera
+
+          def analiza(a, ev):
+              """Devuelve (porcentaje, lineas_resumen, observaciones)."""
+              partes, pesos, res, obs = [], [], [], []
+
+              if ev.get("s"):
+                  r = (a.get("s") or 0) / float(ev["s"])
+                  partes.append(min(1.0, r)); pesos.append(0.35)
+                  res.append("Tiempo: %s de %s planificado (%d%%)" % (hhmm(a.get("s")), hhmm(ev["s"]), round(r*100)))
+              elif a.get("s"):
+                  res.append("Tiempo: %s" % hhmm(a["s"]))
+
+              if ev.get("km"):
+                  r = (a.get("km") or 0) / float(ev["km"])
+                  partes.append(min(1.0, r)); pesos.append(0.2)
+                  res.append("Distancia: %s de %s km (%d%%)" % (dec(a.get("km")), dec(ev["km"]), round(r*100)))
+              elif a.get("km"):
+                  res.append("Distancia: %s km" % dec(a["km"]))
+
+              cp = num(ev.get("l")) or num((crudo_ev.get(str(ev.get("id"))) or {}).get("icu_training_load"))
+              if cp and a.get("l"):
+                  r = a["l"] / float(cp)
+                  partes.append(min(1.0, r)); pesos.append(0.25)
+                  res.append("Carga: %s de %s (%d%%)" % (dec(a["l"], 0), dec(cp, 0), round(r*100)))
+              elif a.get("l"):
+                  res.append("Carga: %s" % dec(a["l"], 0))
+
+              if a.get("np"): res.append("NP: %s W · media %s W" % (dec(a["np"], 1), dec(a.get("pw"), 1)))
+              if a.get("hr"): res.append("Pulso medio: %s ppm" % dec(a["hr"], 1))
+              if a.get("up"): res.append("Desnivel: %s m+" % dec(a["up"], 1))
+
+              # intensidad serie a serie
+              pasos = [p for p in pasos_plan(ev) if p.get("w")]
+              laps = [l for l in (a.get("lp") or []) if l.get("w")]
+              if pasos and laps:
+                  tope = max(p["w"] for p in pasos)
+                  duros = [p for p in pasos if p["w"] >= tope * 0.75]
+                  topeL = max(l["w"] for l in laps)
+                  lapsD = [l for l in laps if l["w"] >= topeL * 0.7]
+                  if duros and lapsD:
+                      n = min(len(duros), len(lapsD)); rs = []
+                      for i in range(n):
+                          obj, real = duros[i]["w"], lapsD[i]["w"]
+                          rs.append(min(1.0, real / obj))
+                          d = (real - obj) / obj * 100.0
+                          if abs(d) >= 4:
+                              obs.append("Serie %d: ibas a %s W y tocaban %s W (%s%d%%)"
+                                         % (i+1, dec(real,1), dec(obj,1), "+" if d > 0 else "", round(d)))
+                      if rs:
+                          partes.append(sum(rs)/len(rs)); pesos.append(0.4)
+                      if len(lapsD) < len(duros):
+                          obs.append("Hiciste %d series de las %d marcadas" % (len(lapsD), len(duros)))
+                      elif not obs:
+                          obs.append("Las %d series dentro de los vatios marcados" % n)
+
+              if a.get("zh"):
+                  tot = sum(a["zh"]) or 1
+                  suave = (a["zh"][0] if len(a["zh"]) > 0 else 0) + (a["zh"][1] if len(a["zh"]) > 1 else 0)
+                  obs.append("Reparto: %d%% suave (Z1-Z2) y %d%% en intensidad"
+                             % (round(suave/tot*100), round((tot-suave)/tot*100)))
+
+              if not partes: return None, res, obs
+              pct = round(sum(p*w for p, w in zip(partes, pesos)) / sum(pesos) * 100)
+              return pct, res, obs
+
+          crudo_ev = {str(e.get("id")): e for e in (evs or [])}
+
+          try:
+              with open("analisis.json", encoding="utf-8") as f:
+                  items = json.load(f).get("items", {})
+          except Exception:
+              items = {}
+
+          def _llama(url, datos=None, cab=None):
+              req = urllib.request.Request(url, data=datos, headers=cab or {})
+              with urllib.request.urlopen(req, timeout=45) as r:
+                  return r.status
+
+          def avisa(txt):
+              """Manda el aviso por los canales que tengan secretos configurados."""
+              env = lambda k: re.sub(r"\s+", "", os.environ.get(k) or "")
+              enviado = False
+
+              # --- Telegram ---
+              tg_tok, tg_chat = env("TG_TOKEN"), env("TG_CHAT")
+              if tg_tok and tg_chat:
+                  try:
+                      cuerpo = urllib.parse.urlencode({
+                          "chat_id": tg_chat, "text": txt, "parse_mode": "Markdown"}).encode()
+                      print("Telegram enviado (HTTP %s)" %
+                            _llama("https://api.telegram.org/bot%s/sendMessage" % tg_tok, cuerpo))
+                      enviado = True
+                  except urllib.error.HTTPError as e:
+                      print("Telegram HTTP", e.code, e.read().decode("utf-8", "replace")[:200])
+                  except Exception as e:
+                      print("Telegram fallo:", e)
+
+              # --- ntfy (notificacion al movil) ---
+              nt = env("NTFY_TOPIC")
+              if nt:
+                  # admite el nombre del canal o la URL completa que da la app
+                  if nt.startswith("http://") or nt.startswith("https://"):
+                      destino = nt.rstrip("/")
+                  else:
+                      serv = (env("NTFY_SERVER") or "https://ntfy.sh").rstrip("/")
+                      if not serv.startswith("http"): serv = "https://" + serv
+                      destino = serv + "/" + urllib.parse.quote(nt)
+                  try:
+                      plano = txt.replace("*", "").replace("_", "")
+                      cab = {"Title": "Entreno analizado",
+                             "Tags": "runner", "Priority": "default",
+                             "Content-Type": "text/plain; charset=utf-8"}
+                      print("ntfy -> %s (HTTP %s)" % (destino, _llama(destino, plano.encode("utf-8"), cab)))
+                      enviado = True
+                  except urllib.error.HTTPError as e:
+                      print("ntfy HTTP", e.code, e.read().decode("utf-8", "replace")[:200])
+                  except Exception as e:
+                      print("ntfy fallo:", e)
+
+              # --- WhatsApp (CallMeBot) ---
+              tel = re.sub(r"[^0-9+]", "", os.environ.get("WA_PHONE") or "")
+              key = env("WA_APIKEY")
+              if tel and key:
+                  try:
+                      url = ("https://api.callmebot.com/whatsapp.php?phone=%s&apikey=%s&text=%s"
+                             % (urllib.parse.quote(tel), urllib.parse.quote(key), urllib.parse.quote(txt)))
+                      print("WhatsApp enviado (HTTP %s)" % _llama(url))
+                      enviado = True
+                  except urllib.error.HTTPError as e:
+                      print("WhatsApp HTTP", e.code, e.read().decode("utf-8", "replace")[:150])
+                  except Exception as e:
+                      print("WhatsApp fallo:", e)
+
+              if not enviado:
+                  print("Aviso: sin canal configurado (TG_TOKEN+TG_CHAT, NTFY_TOPIC o WA_PHONE+WA_APIKEY)")
+              return enviado
+
+          limite = (hoy - datetime.timedelta(days=3)).isoformat()
+          nuevos = 0
+          for a in salida:
+              if a["d"] < limite or str(a["id"]) in items:
+                  continue
+              cand = [e for e in plan if e["d"] == a["d"] and e["c"] == "WORKOUT"
+                      and (not e.get("t") or fam(e["t"]) == fam(a["t"]))]
+              if not cand:
+                  continue
+              ev = cand[0]
+              pct, res, obs = analiza(a, ev)
+              if pct is None:
+                  continue
+              veredicto = ("Clavado, entreno completo." if pct >= 95 else
+                           "Casi entero, muy bien." if pct >= 85 else
+                           "A medias respecto a lo planificado." if pct >= 60 else
+                           "Se quedo bastante corto.")
+              items[str(a["id"])] = {"d": a["d"], "pct": pct, "n": a["n"], "plan": ev.get("n") or "",
+                                     "res": res, "obs": obs, "ver": veredicto}
+              txt = ("*%s · %d%% completado*\n_%s_\n\n*Resumen*\n%s\n\n*Observaciones*\n%s"
+                     % (a["n"] or "Entreno", pct, ev.get("n") or "Entreno planificado",
+                        "\n".join("• " + x for x in res) or "• Sin datos",
+                        "\n".join("• " + x for x in obs + [veredicto])))
+              if avisa(txt):
+                  items[str(a["id"])]["wa"] = True
+              nuevos += 1
+              print("Analisis:", a["d"], a["n"], "->", pct, "%")
+
+          print("Analisis nuevos:", nuevos, "· guardados:", len(items))
+          with open("analisis.json", "w", encoding="utf-8") as f:
+              json.dump({"updated": datetime.datetime.now(datetime.timezone.utc)
+                         .replace(microsecond=0, tzinfo=None).isoformat() + "Z",
+                         "items": items}, f, ensure_ascii=False, separators=(",", ":"))
+
           datos = {"updated": datetime.datetime.now(datetime.timezone.utc)
                                 .replace(microsecond=0, tzinfo=None).isoformat() + "Z",
                    "activities": salida}
@@ -369,6 +598,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add runs.json plan.json forma.json
+          git add runs.json plan.json forma.json analisis.json
           git diff --staged --quiet || git commit -m "Actualizar actividades"
           git push
